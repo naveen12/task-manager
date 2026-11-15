@@ -1,6 +1,6 @@
 import React from 'react';
 import type { User } from 'firebase/auth';
-import { Minus, Moon, Plus, RotateCcw, Sun, Type } from 'lucide-react';
+import { BellRing, CheckCircle2, Minus, Moon, Plus, RotateCcw, Sun, Type } from 'lucide-react';
 import {
   DEFAULT_SETTINGS,
   type AppFontFamily,
@@ -13,6 +13,7 @@ import {
 } from '../types/chrono';
 import { BackupSection } from './BackupSection';
 import type { ChronoBackupPayload } from '../utils/googleDriveBackup';
+import type { NotificationPermissionState } from '../utils/notificationEngine';
 import { soundEngine } from '../utils/soundEngine';
 
 interface SettingsSectionProps {
@@ -26,6 +27,9 @@ interface SettingsSectionProps {
   alarms: ChronoAlarm[];
   notes: NoteItem[];
   onRestoreBackup: (payload: ChronoBackupPayload) => void;
+  notificationPermission: NotificationPermissionState;
+  onRequestNotificationPermission: () => void;
+  onTestAlertPopup: () => void;
 }
 
 const FONT_OPTIONS: {
@@ -84,6 +88,9 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   alarms,
   notes,
   onRestoreBackup,
+  notificationPermission,
+  onRequestNotificationPermission,
+  onTestAlertPopup,
 }) => {
   const setTheme = (theme: ThemeMode) => {
     soundEngine.playTick(840, 0.02);
@@ -171,6 +178,63 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
             >
               <Sun className="h-3.5 w-3.5 text-amber-500" />
               Light
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Notifications & Lock-Screen Alerts Card */}
+      <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/80 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 shadow-sm dark:shadow-none">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-50 dark:bg-[#F59E0B]/15 text-amber-600 dark:text-[#F59E0B]">
+              <BellRing className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                Notifications &amp; Alert Popups
+              </h3>
+              <p className="mt-0.5 text-xs text-slate-600 dark:text-[#94A3B8]">
+                Show system notifications and minimal Snooze / Stop popups for Tasks, Reminders, and Alarms
+              </p>
+              <p className="mt-1.5 text-xs font-medium text-slate-700 dark:text-[#cbd5e1] inline-flex items-center gap-1.5">
+                {notificationPermission === 'granted' ? (
+                  <>
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-[#34D399]" />
+                    <span className="text-emerald-700 dark:text-[#34D399]">
+                      Notifications enabled
+                    </span>
+                  </>
+                ) : notificationPermission === 'denied' ? (
+                  <span className="text-red-600 dark:text-[#ffb4ab]">
+                    Blocked in browser/OS settings — allow notifications for this site to see lock-screen alerts
+                  </span>
+                ) : notificationPermission === 'unsupported' ? (
+                  <span>System notifications not supported in this browser</span>
+                ) : (
+                  <span>Permission not yet granted</span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {notificationPermission !== 'granted' &&
+              notificationPermission !== 'unsupported' && (
+                <button
+                  type="button"
+                  onClick={onRequestNotificationPermission}
+                  className="min-h-[42px] rounded-full bg-gradient-to-r from-[#6366F1] to-[#818CF8] px-4 text-xs font-semibold text-white shadow-[0_0_16px_rgba(99,102,241,0.35)] cursor-pointer whitespace-nowrap"
+                >
+                  Enable Notifications
+                </button>
+              )}
+            <button
+              type="button"
+              onClick={onTestAlertPopup}
+              className="min-h-[42px] rounded-full bg-slate-100 dark:bg-white/[0.06] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:border-amber-400 dark:hover:border-[#F59E0B]/45 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Test Alert Popup
             </button>
           </div>
         </div>

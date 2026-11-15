@@ -1,77 +1,130 @@
 import React from 'react';
-import { BellRing, Clock } from 'lucide-react';
-import type { ChronoAlarm } from '../types/chrono';
+import { AlarmClock, Bell, BellRing, CheckSquare, Clock, Square } from 'lucide-react';
+import type { ActiveAlert, AlertSourceType } from '../utils/notificationEngine';
 
 interface AlarmRingOverlayProps {
-  alarm: ChronoAlarm | null;
+  alert: ActiveAlert | null;
+  queueCount?: number;
   onSnooze: () => void;
-  onDismiss: () => void;
+  onStop: () => void;
 }
 
-export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
-  alarm,
-  onSnooze,
-  onDismiss,
-}) => {
-  if (!alarm) return null;
+const TYPE_STYLE: Record<
+  AlertSourceType,
+  {
+    label: string;
+    accentText: string;
+    iconWrap: string;
+    border: string;
+    glow: string;
+    stopBtn: string;
+    Icon: React.ComponentType<{ className?: string }>;
+  }
+> = {
+  alarm: {
+    label: 'Alarm',
+    accentText: 'text-amber-600 dark:text-[#F59E0B]',
+    iconWrap:
+      'bg-amber-50 dark:bg-[#F59E0B]/15 text-amber-600 dark:text-[#F59E0B] border-amber-300 dark:border-[#F59E0B]/35',
+    border: 'border-amber-400/60 dark:border-[#F59E0B]/45',
+    glow: 'bg-[#F59E0B]/20',
+    stopBtn:
+      'bg-[#F59E0B] text-[#090A0F] shadow-[0_0_24px_rgba(245,158,11,0.4)] hover:bg-[#fbbf24]',
+    Icon: AlarmClock,
+  },
+  reminder: {
+    label: 'Reminder',
+    accentText: 'text-emerald-600 dark:text-[#34D399]',
+    iconWrap:
+      'bg-emerald-50 dark:bg-[#10B981]/15 text-emerald-600 dark:text-[#34D399] border-emerald-300 dark:border-[#10B981]/35',
+    border: 'border-emerald-400/60 dark:border-[#10B981]/45',
+    glow: 'bg-[#10B981]/20',
+    stopBtn:
+      'bg-[#10B981] text-white dark:text-[#090A0F] shadow-[0_0_24px_rgba(16,185,129,0.38)] hover:bg-[#34d399]',
+    Icon: Bell,
+  },
+  task: {
+    label: 'Task',
+    accentText: 'text-indigo-600 dark:text-[#818CF8]',
+    iconWrap:
+      'bg-indigo-50 dark:bg-[#6366F1]/15 text-indigo-600 dark:text-[#818CF8] border-indigo-300 dark:border-[#6366F1]/35',
+    border: 'border-indigo-400/60 dark:border-[#6366F1]/45',
+    glow: 'bg-[#6366F1]/25',
+    stopBtn:
+      'bg-gradient-to-r from-[#6366F1] to-[#818CF8] text-white shadow-[0_0_24px_rgba(99,102,241,0.42)] hover:opacity-95',
+    Icon: CheckSquare,
+  },
+};
 
-  const h12 = alarm.hour24 % 12 || 12;
-  const period = alarm.hour24 >= 12 ? 'PM' : 'AM';
-  const formatted = `${String(h12).padStart(2, '0')}:${String(alarm.minute).padStart(2, '0')}`;
+export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
+  alert,
+  queueCount = 1,
+  onSnooze,
+  onStop,
+}) => {
+  if (!alert) return null;
+
+  const style = TYPE_STYLE[alert.type];
+  const TypeIcon = style.Icon ?? BellRing;
 
   return (
     <div
       role="alertdialog"
       aria-modal="true"
-      aria-labelledby="alarm-ring-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 dark:bg-[#090A0F]/90 backdrop-blur-2xl p-5"
+      aria-labelledby="active-alert-name"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 dark:bg-[#050609]/95 backdrop-blur-2xl p-5"
     >
-      <div className="relative w-full max-w-md overflow-hidden rounded-[32px] bg-white dark:bg-[#1A1D2D] border border-amber-400/60 dark:border-[#F59E0B]/40 p-8 text-center shadow-[0_0_80px_rgba(245,158,11,0.28)]">
+      <div
+        className={`relative w-full max-w-sm overflow-hidden rounded-[32px] bg-white dark:bg-[#141622] border ${style.border} p-7 sm:p-8 text-center shadow-2xl`}
+      >
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -top-20 left-1/2 -translate-x-1/2 h-48 w-48 rounded-full bg-[#F59E0B]/20 blur-[64px]"
+          className={`pointer-events-none absolute -top-20 left-1/2 -translate-x-1/2 h-44 w-44 rounded-full ${style.glow} blur-[64px]`}
         />
 
-        <div className="relative z-10 mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-amber-50 dark:bg-[#F59E0B]/15 text-amber-600 dark:text-[#F59E0B] border border-amber-300 dark:border-[#F59E0B]/30">
-          <BellRing className="h-8 w-8" />
+        {/* Minimal Info 1: Type */}
+        <div
+          className={`relative z-10 mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border ${style.iconWrap}`}
+        >
+          <TypeIcon className="h-7 w-7" />
         </div>
 
-        <p className="relative z-10 text-xs font-semibold uppercase tracking-[0.12em] text-amber-600 dark:text-[#F59E0B]">
-          Alarm Active
+        <p className={`relative z-10 text-xs font-semibold tracking-wider uppercase ${style.accentText}`}>
+          {style.label} · {alert.timeLabel}
         </p>
 
-        <div className="relative z-10 mt-3 flex items-baseline justify-center gap-2 font-mono tabular-nums">
-          <span className="text-5xl font-semibold tracking-tight text-slate-900 dark:text-[#F8FAFC]">
-            {formatted}
-          </span>
-          <span className="text-lg font-medium text-amber-600 dark:text-[#F59E0B]">
-            {period}
-          </span>
-        </div>
-
+        {/* Minimal Info 2: Name */}
         <h2
-          id="alarm-ring-title"
-          className="relative z-10 mt-3 text-xl font-semibold text-slate-900 dark:text-[#F8FAFC]"
+          id="active-alert-name"
+          className="relative z-10 mt-3 text-2xl font-bold tracking-tight text-slate-900 dark:text-[#F8FAFC] text-balance break-words"
         >
-          {alarm.label || 'Kairo Alarm'}
+          {alert.name}
         </h2>
 
-        <div className="relative z-10 mt-8 flex flex-col sm:flex-row gap-3">
+        {queueCount > 1 && (
+          <p className="relative z-10 mt-2 text-xs text-slate-500 dark:text-[#94A3B8] tabular-nums">
+            1 of {queueCount} active alerts
+          </p>
+        )}
+
+        {/* Minimal Actions: Snooze or Stop */}
+        <div className="relative z-10 mt-7 flex flex-col sm:flex-row gap-3">
           <button
             type="button"
             onClick={onSnooze}
-            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.06] px-6 text-sm font-semibold text-slate-900 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/15 hover:bg-slate-200/70 dark:hover:bg-white/10 active:scale-[0.98] transition-all cursor-pointer"
+            className="flex h-13 flex-1 items-center justify-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.08] px-5 text-sm font-semibold text-slate-900 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/15 hover:bg-slate-200/75 dark:hover:bg-white/15 active:scale-[0.98] transition-all cursor-pointer"
           >
-            <Clock className="h-4 w-4 text-amber-600 dark:text-[#F59E0B]" />
-            Snooze 5 min
+            <Clock className={`h-4 w-4 ${style.accentText}`} />
+            Snooze 5m
           </button>
 
           <button
             type="button"
-            onClick={onDismiss}
-            className="flex h-12 flex-1 items-center justify-center rounded-full bg-[#F59E0B] px-6 text-sm font-semibold text-[#090A0F] shadow-[0_0_24px_rgba(245,158,11,0.4)] hover:bg-[#fbbf24] active:scale-[0.98] transition-all cursor-pointer"
+            onClick={onStop}
+            className={`flex h-13 flex-1 items-center justify-center gap-2 rounded-full px-5 text-sm font-semibold active:scale-[0.98] transition-all cursor-pointer ${style.stopBtn}`}
           >
-            Dismiss Alarm
+            <Square className="h-3.5 w-3.5 fill-current" />
+            Stop
           </button>
         </div>
       </div>

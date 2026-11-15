@@ -13,6 +13,7 @@ import { AppLogo } from './components/AppLogo';
 import {
   DEFAULT_SETTINGS,
   doesReminderOccurOnDate,
+  formatDateToYMD,
   getInitialNotes,
   getInitialReminders,
   getInitialTasks,
@@ -35,6 +36,17 @@ import { NotesSection } from './components/NotesSection';
 import { SettingsSection } from './components/SettingsSection';
 import { AlarmRingOverlay } from './components/AlarmRingOverlay';
 import { soundEngine } from './utils/soundEngine';
+import {
+  closeSystemAlertNotification,
+  getNotificationPermissionState,
+  registerNotificationServiceWorker,
+  requestOSNotificationPermission,
+  showSystemAlertNotification,
+  startAlertVibration,
+  stopAlertVibration,
+  type ActiveAlert,
+  type NotificationPermissionState,
+} from './utils/notificationEngine';
 import { initAuth } from './utils/googleAuth';
 import type { ChronoBackupPayload } from './utils/googleDriveBackup';
 
@@ -44,7 +56,27 @@ const STORAGE_KEYS = {
   alarms: 'chrono_tempo_alarms_v2',
   notes: 'chrono_tempo_notes_v2',
   settings: 'chrono_tempo_settings_v1',
+  snoozed: 'kairo_snoozed_alerts_v1',
 };
+
+interface SnoozedAlertEntry {
+  alert: ActiveAlert;
+  triggerAtMs: number;
+}
+
+function format12HourTime(hour24: number, minute: number): string {
+  const h12 = hour24 % 12 || 12;
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  return `${String(h12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${period}`;
+}
+
+function parseHHMM(hhmm: string): { hour24: number; minute: number } | null {
+  const parts = hhmm.split(':').map(Number);
+  if (parts.length < 2 || Number.isNaN(parts[0]) || Number.isNaN(parts[1])) {
+    return null;
+  }
+  return { hour24: parts[0], minute: parts[1] };
+}
 
 const FONT_STACKS: Record<AppFontFamily, { display: string; sans: string }> = {
   jakarta: {
@@ -127,11 +159,16 @@ export default function App() {
     notes: 0,
   });
 
-  const [ringingAlarm, setRingingAlarm] = useState<ChronoAlarm | null>(null);
-  const [dueReminderAlert, setDueReminderAlert] = useState<ReminderItem | null>(
-    null
+  const [alertQueue, setAlertQueue] = useState<ActiveAlert[]>([]);
+  const [snoozedAlerts, setSnoozedAlerts] = useState<SnoozedAlertEntry[]>(() =>
+    loadStored<SnoozedAlertEntry[]>(STORAGE_KEYS.snoozed, () => [])
   );
-  const lastTriggeredMinuteRef = useRef<string>('');
+  const [notificationPermission, setNotificationPermission] =
+    useState<NotificationPermissionState>(() => getNotificationPermissionState());
+  const [notifBannerDismissed, setNotifBannerDismissed] = useState<boolean>(false);
+
+  const sessionStartMsRef = useRef<number>(Date.now());
+  const firedKeysRef = useRef<Set<string>>(new Set());
 
   // Google Account auth state (token cached strictly in memory)
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -204,54 +241,168 @@ export default function App() {
     }
   }, [notes]);
 
-  // Real-time 1s clock + automatic Alarm & Reminder trigger check
   useEffect(() => {
-    const id = window.setInterval(() => {
-      const current = new Date();
-      setNow(current);
+    try {
+      localStorage.setItem(STORAGE_KEYS.snoozed, JSON.stringify(snoozedAlerts));
+    } catch {
+      // Ignore
+    }
+  }, [snoozedAlerts]);
 
-      const minuteKey = `${current.getFullYear()}-${current.getMonth()}-${current.getDate()}-${current.getHours()}:${current.getMinutes()}`;
-      if (lastTriggeredMinuteRef.current !== minuteKey) {
-        lastTriggeredMinuteRef.current = minuteKey;
+  // Register Service Worker for interactive OS notifications
+  useEffect(() => {
+    if (notificationPermission === 'granted') {
+      void registerNotificationServiceWorker();
+    }
+  }, [notificationPermission]);
 
-        const currentHour = current.getHours();
-        const currentMin = current.getMinutes();
-        const currentDay = current.getDay();
-        const currentHHMM = `${String(currentHour).padStart(2, '0')}:${String(
-          currentMin
-        ).padStart(2, '0')}`;
-        const todayStr = getTodayDateString();
+  const activeAlert = alertQueue[0] ?? null;
 
-        const matchingAlarm = alarms.find(
-          (a) =>
-            a.enabled &&
-            a.hour24 === currentHour &&
-            a.minute === currentMin &&
-            (a.days.length === 0 || a.days.includes(currentDay))
-        );
-        if (matchingAlarm) {
-          setRingingAlarm(matchingAlarm);
-          soundEngine.startAlarmLoop(
-            matchingAlarm.tone,
-            matchingAlarm.customRingtoneId
-          );
-        }
+  // Keep sound loop + vibration synced with the frontmost active alert
+  useEffect(() => {
+    if (!activeAlert) {
+      soundEngine.stopAlarmLoop();
+      stopAlertVibration();
+      return;
+    }
+    soundEngine.startAlarmLoop(activeAlert.tone, activeAlert.customRingtoneId);
+    startAlertVibration();
+  }, [activeAlert?.uid]);
 
-        const matchingReminder = reminders.find(
-          (r) =>
-            r.active &&
-            !r.completed &&
-            r.time === currentHHMM &&
-            doesReminderOccurOnDate(r, todayStr)
-        );
-        if (matchingReminder) {
-          setDueReminderAlert(matchingReminder);
-          soundEngine.playCompletionChime();
-        }
+  const enqueueAlerts = useCallback((incoming: ActiveAlert[]) => {
+    if (incoming.length === 0) return;
+    setAlertQueue((prev) => {
+      const existingUids = new Set(prev.map((a) => a.uid));
+      const fresh = incoming.filter((a) => !existingUids.has(a.uid));
+      if (fresh.length === 0) return prev;
+      fresh.forEach((a) => {
+        void showSystemAlertNotification(a);
+      });
+      return [...prev, ...fresh];
+    });
+  }, []);
+
+  // Real-time 1s clock + Task, Reminder, Alarm & Snooze trigger check (with lock/sleep catch-up)
+  const evaluateDueAlerts = useCallback(() => {
+    const current = new Date();
+    const nowMs = current.getTime();
+    setNow(current);
+
+    const todayStr = formatDateToYMD(current);
+    const currentDay = current.getDay();
+    const dueAlerts: ActiveAlert[] = [];
+
+    const isDueInWindow = (hour24: number, minute: number, key: string): boolean => {
+      if (firedKeysRef.current.has(key)) return false;
+      const scheduled = new Date(
+        current.getFullYear(),
+        current.getMonth(),
+        current.getDate(),
+        hour24,
+        minute,
+        0,
+        0
+      ).getTime();
+      if (
+        nowMs >= scheduled &&
+        nowMs - scheduled <= 15 * 60 * 1000 &&
+        scheduled >= sessionStartMsRef.current - 60 * 1000
+      ) {
+        firedKeysRef.current.add(key);
+        return true;
       }
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [alarms, reminders]);
+      return false;
+    };
+
+    // 1. Alarms
+    alarms.forEach((a) => {
+      if (!a.enabled) return;
+      if (a.days.length > 0 && !a.days.includes(currentDay)) return;
+      const key = `alarm:${a.id}:${todayStr}:${a.hour24}:${a.minute}`;
+      if (isDueInWindow(a.hour24, a.minute, key)) {
+        dueAlerts.push({
+          uid: key,
+          sourceId: a.id,
+          type: 'alarm',
+          name: a.label || 'Kairo Alarm',
+          timeLabel: format12HourTime(a.hour24, a.minute),
+          tone: a.tone,
+          customRingtoneId: a.customRingtoneId,
+        });
+      }
+    });
+
+    // 2. Reminders
+    reminders.forEach((r) => {
+      if (!r.active || r.completed) return;
+      if (!doesReminderOccurOnDate(r, todayStr)) return;
+      const parsed = parseHHMM(r.time);
+      if (!parsed) return;
+      const key = `reminder:${r.id}:${todayStr}:${r.time}`;
+      if (isDueInWindow(parsed.hour24, parsed.minute, key)) {
+        dueAlerts.push({
+          uid: key,
+          sourceId: r.id,
+          type: 'reminder',
+          name: r.title,
+          timeLabel: format12HourTime(parsed.hour24, parsed.minute),
+          tone: 'zenith',
+        });
+      }
+    });
+
+    // 3. Tasks
+    tasks.forEach((t) => {
+      if (t.completed || t.dueDate !== todayStr) return;
+      const parsed = parseHHMM(t.dueTime);
+      if (!parsed) return;
+      const key = `task:${t.id}:${todayStr}:${t.dueTime}`;
+      if (isDueInWindow(parsed.hour24, parsed.minute, key)) {
+        dueAlerts.push({
+          uid: key,
+          sourceId: t.id,
+          type: 'task',
+          name: t.title,
+          timeLabel: format12HourTime(parsed.hour24, parsed.minute),
+          tone: 'dawn',
+        });
+      }
+    });
+
+    // 4. Snoozed Alerts (for Alarms, Reminders, and Tasks)
+    const dueSnoozes = snoozedAlerts.filter((entry) => nowMs >= entry.triggerAtMs);
+    if (dueSnoozes.length > 0) {
+      setSnoozedAlerts((prev) => prev.filter((entry) => nowMs < entry.triggerAtMs));
+      dueSnoozes.forEach((entry) => {
+        const d = new Date(entry.triggerAtMs);
+        dueAlerts.push({
+          ...entry.alert,
+          uid: `${entry.alert.sourceId}-snooze-${entry.triggerAtMs}`,
+          timeLabel: format12HourTime(d.getHours(), d.getMinutes()),
+        });
+      });
+    }
+
+    if (dueAlerts.length > 0) {
+      enqueueAlerts(dueAlerts);
+    }
+  }, [alarms, reminders, tasks, snoozedAlerts, enqueueAlerts]);
+
+  useEffect(() => {
+    const id = window.setInterval(evaluateDueAlerts, 1000);
+    const onWake = () => {
+      if (document.visibilityState === 'visible') {
+        evaluateDueAlerts();
+      }
+    };
+    document.addEventListener('visibilitychange', onWake);
+    window.addEventListener('focus', onWake);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onWake);
+      window.removeEventListener('focus', onWake);
+    };
+  }, [evaluateDueAlerts]);
 
   // Quick Add handler from Dashboard '+' button
   const handleQuickAdd = useCallback(
@@ -354,37 +505,108 @@ export default function App() {
     setAlarms((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
-  const handleTriggerTestRing = useCallback((alarm: ChronoAlarm) => {
-    setRingingAlarm(alarm);
-    soundEngine.startAlarmLoop(alarm.tone, alarm.customRingtoneId);
-  }, []);
-
-  const handleDismissAlarm = useCallback(() => {
-    soundEngine.stopAlarmLoop();
-    setRingingAlarm(null);
-  }, []);
-
-  const handleSnoozeAlarm = useCallback(() => {
-    soundEngine.stopAlarmLoop();
-    if (ringingAlarm) {
-      const snoozeDate = new Date(Date.now() + 5 * 60 * 1000);
-      setAlarms((prev) => [
-        ...prev,
+  const handleTriggerTestRing = useCallback(
+    (alarm: ChronoAlarm) => {
+      enqueueAlerts([
         {
-          id: `snooze-${Date.now()}`,
-          hour24: snoozeDate.getHours(),
-          minute: snoozeDate.getMinutes(),
-          label: `${ringingAlarm.label} (Snoozed)`,
-          enabled: true,
-          days: [],
-          tone: ringingAlarm.tone,
-          customRingtoneId: ringingAlarm.customRingtoneId,
-          customRingtoneName: ringingAlarm.customRingtoneName,
+          uid: `test-${alarm.id}-${Date.now()}`,
+          sourceId: alarm.id,
+          type: 'alarm',
+          name: alarm.label || 'Kairo Alarm',
+          timeLabel: format12HourTime(alarm.hour24, alarm.minute),
+          tone: alarm.tone,
+          customRingtoneId: alarm.customRingtoneId,
         },
       ]);
+    },
+    [enqueueAlerts]
+  );
+
+  const handleStopAlert = useCallback(
+    (targetUid?: string) => {
+      const target = targetUid
+        ? alertQueue.find((a) => a.uid === targetUid)
+        : alertQueue[0];
+      if (target) {
+        void closeSystemAlertNotification(target.uid);
+        setAlertQueue((prev) => prev.filter((a) => a.uid !== target.uid));
+      } else {
+        soundEngine.stopAlarmLoop();
+        stopAlertVibration();
+      }
+    },
+    [alertQueue]
+  );
+
+  const handleSnoozeAlert = useCallback(
+    (targetUid?: string) => {
+      const target = targetUid
+        ? alertQueue.find((a) => a.uid === targetUid)
+        : alertQueue[0];
+      if (!target) return;
+
+      void closeSystemAlertNotification(target.uid);
+      const triggerAtMs = Date.now() + 5 * 60 * 1000;
+      const snoozeDate = new Date(triggerAtMs);
+      setSnoozedAlerts((prev) => [
+        ...prev,
+        {
+          alert: {
+            ...target,
+            timeLabel: format12HourTime(
+              snoozeDate.getHours(),
+              snoozeDate.getMinutes()
+            ),
+          },
+          triggerAtMs,
+        },
+      ]);
+      setAlertQueue((prev) => prev.filter((a) => a.uid !== target.uid));
+    },
+    [alertQueue]
+  );
+
+  // Listen to Service Worker notification Snooze/Stop action button clicks
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+      return;
     }
-    setRingingAlarm(null);
-  }, [ringingAlarm]);
+    const handleMessage = (event: MessageEvent) => {
+      const payload = event.data as
+        | { type?: string; action?: string; uid?: string }
+        | undefined;
+      if (!payload || payload.type !== 'KAIRO_NOTIFICATION_ACTION') return;
+      if (payload.action === 'snooze') {
+        handleSnoozeAlert(payload.uid);
+      } else if (payload.action === 'stop') {
+        handleStopAlert(payload.uid);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handleMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', handleMessage);
+    };
+  }, [handleSnoozeAlert, handleStopAlert]);
+
+  const handleRequestNotificationPermission = useCallback(async () => {
+    soundEngine.playTick(860, 0.02);
+    const next = await requestOSNotificationPermission();
+    setNotificationPermission(next);
+  }, []);
+
+  const handleTestAlertPopup = useCallback(() => {
+    const d = new Date();
+    enqueueAlerts([
+      {
+        uid: `test-alert-${Date.now()}`,
+        sourceId: 'test-reminder',
+        type: 'reminder',
+        name: 'Sample Alert · Tap Snooze or Stop',
+        timeLabel: format12HourTime(d.getHours(), d.getMinutes()),
+        tone: 'amber',
+      },
+    ]);
+  }, [enqueueAlerts]);
 
   // Note CRUD handlers
   const handleCreateNote = useCallback(
@@ -655,38 +877,31 @@ export default function App() {
             </p>
           </div>
 
-          {/* Live Due Reminder Banner */}
-          {dueReminderAlert && (
+          {/* One-tap Notification Permission Prompt (when not yet granted) */}
+          {notificationPermission === 'default' && !notifBannerDismissed && (
             <div
-              role="status"
-              className="mb-6 flex items-center justify-between gap-4 rounded-2xl bg-emerald-50 dark:bg-[#10B981]/15 border border-emerald-300 dark:border-[#10B981]/40 px-4 py-3"
+              role="region"
+              aria-label="Enable notifications"
+              className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-indigo-50 dark:bg-[#6366F1]/12 border border-indigo-200 dark:border-[#6366F1]/35 px-4 py-3"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <Bell className="h-4 w-4 text-emerald-600 dark:text-[#34D399] shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-emerald-700 dark:text-[#34D399]">
-                    Reminder · {dueReminderAlert.time}
-                  </p>
-                  <p className="truncate text-sm font-medium text-slate-900 dark:text-[#F8FAFC]">
-                    {dueReminderAlert.title}
-                  </p>
-                </div>
+                <Bell className="h-4 w-4 text-indigo-600 dark:text-[#818CF8] shrink-0" />
+                <p className="text-xs sm:text-sm text-slate-800 dark:text-[#F8FAFC]">
+                  Enable notifications so Tasks, Reminders, and Alarms alert you with Snooze &amp; Stop controls.
+                </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() => {
-                    handleToggleReminderDone(dueReminderAlert.id);
-                    setDueReminderAlert(null);
-                  }}
-                  className="h-9 rounded-full bg-[#10B981] px-3.5 text-xs font-semibold text-white dark:text-[#090A0F] cursor-pointer"
+                  onClick={() => void handleRequestNotificationPermission()}
+                  className="h-9 rounded-full bg-gradient-to-r from-[#6366F1] to-[#818CF8] px-4 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
                 >
-                  Mark Done
+                  Enable Alerts
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDueReminderAlert(null)}
-                  aria-label="Dismiss reminder banner"
+                  onClick={() => setNotifBannerDismissed(true)}
+                  aria-label="Dismiss notification prompt"
                   className="flex h-9 w-9 items-center justify-center rounded-full text-slate-500 dark:text-[#94A3B8] hover:text-slate-900 dark:hover:text-[#F8FAFC] cursor-pointer"
                 >
                   <X className="h-4 w-4" />
@@ -772,6 +987,11 @@ export default function App() {
               alarms={alarms}
               notes={notes}
               onRestoreBackup={handleRestoreBackup}
+              notificationPermission={notificationPermission}
+              onRequestNotificationPermission={() => {
+                void handleRequestNotificationPermission();
+              }}
+              onTestAlertPopup={handleTestAlertPopup}
             />
           )}
         </div>
@@ -818,11 +1038,12 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Urgent Amber Alarm Trigger Overlay */}
+      {/* Minimal Lock-Screen Ready Alert Popup (Task, Reminder, Alarm) */}
       <AlarmRingOverlay
-        alarm={ringingAlarm}
-        onSnooze={handleSnoozeAlarm}
-        onDismiss={handleDismissAlarm}
+        alert={activeAlert}
+        queueCount={alertQueue.length}
+        onSnooze={() => handleSnoozeAlert()}
+        onStop={() => handleStopAlert()}
       />
     </div>
   );
