@@ -1,6 +1,28 @@
-export type NavTab = 'dashboard' | 'tasks' | 'reminders' | 'alarms' | 'notes' | 'backup';
+export type NavTab =
+  | 'dashboard'
+  | 'tasks'
+  | 'reminders'
+  | 'alarms'
+  | 'notes'
+  | 'settings';
 
-export type TaskPriority = 'normal' | 'high';
+export type PriorityLevel = 'low' | 'medium' | 'high';
+
+export type ThemeMode = 'dark' | 'light';
+
+export type AppFontFamily = 'jakarta' | 'manrope' | 'outfit' | 'lora' | 'mono';
+
+export interface AppSettings {
+  theme: ThemeMode;
+  fontSizePx: number;
+  fontFamily: AppFontFamily;
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  theme: 'dark',
+  fontSizePx: 16,
+  fontFamily: 'jakarta',
+};
 
 export interface TaskItem {
   id: string;
@@ -8,12 +30,12 @@ export interface TaskItem {
   dueDate: string; // YYYY-MM-DD
   dueTime: string; // HH:MM
   durationMinutes: number;
-  priority: TaskPriority;
+  priority: PriorityLevel;
   completed: boolean;
   details?: string;
 }
 
-export type ReminderRepeat = 'once' | 'daily' | 'weekdays';
+export type ReminderRepeat = 'once' | 'daily' | 'weekdays' | 'monthly' | 'yearly';
 
 export interface ReminderItem {
   id: string;
@@ -21,12 +43,13 @@ export interface ReminderItem {
   date: string; // YYYY-MM-DD
   time: string; // HH:MM
   repeat: ReminderRepeat;
+  priority: PriorityLevel;
   active: boolean;
   completed: boolean;
   note?: string;
 }
 
-export type AlarmTone = 'dawn' | 'amber' | 'zenith' | 'pulse';
+export type AlarmTone = 'dawn' | 'amber' | 'zenith' | 'pulse' | 'custom';
 
 export interface ChronoAlarm {
   id: string;
@@ -36,6 +59,8 @@ export interface ChronoAlarm {
   enabled: boolean;
   days: number[]; // 0=Sun, 1=Mon, ..., 6=Sat
   tone: AlarmTone;
+  customRingtoneId?: string;
+  customRingtoneName?: string;
 }
 
 export type NoteCategory = 'General' | 'Work' | 'Ideas';
@@ -49,21 +74,63 @@ export interface NoteItem {
   updatedAt: string; // ISO
 }
 
-export function getTodayDateString(): string {
-  const d = new Date();
+export function formatDateToYMD(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
 
+export function parseYMDToLocalDate(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+export function doesReminderOccurOnDate(
+  reminder: ReminderItem,
+  targetDateStr: string
+): boolean {
+  if (reminder.date === targetDateStr) return true;
+  if (targetDateStr < reminder.date) return false;
+
+  const targetDate = parseYMDToLocalDate(targetDateStr);
+  const startDate = parseYMDToLocalDate(reminder.date);
+  const targetWeekday = targetDate.getDay();
+
+  if (reminder.repeat === 'daily') return true;
+  if (reminder.repeat === 'weekdays') {
+    return targetWeekday >= 1 && targetWeekday <= 5;
+  }
+  if (reminder.repeat === 'monthly') {
+    const daysInTargetMonth = new Date(
+      targetDate.getFullYear(),
+      targetDate.getMonth() + 1,
+      0
+    ).getDate();
+    const clampedDay = Math.min(startDate.getDate(), daysInTargetMonth);
+    return targetDate.getDate() === clampedDay;
+  }
+  if (reminder.repeat === 'yearly') {
+    if (targetDate.getMonth() !== startDate.getMonth()) return false;
+    const daysInTargetMonth = new Date(
+      targetDate.getFullYear(),
+      targetDate.getMonth() + 1,
+      0
+    ).getDate();
+    const clampedDay = Math.min(startDate.getDate(), daysInTargetMonth);
+    return targetDate.getDate() === clampedDay;
+  }
+  return false;
+}
+
+export function getTodayDateString(): string {
+  return formatDateToYMD(new Date());
+}
+
 export function getOffsetDateString(offsetDays: number): string {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return formatDateToYMD(d);
 }
 
 export function getInitialTasks(): TaskItem[] {
@@ -96,7 +163,7 @@ export function getInitialTasks(): TaskItem[] {
       dueDate: today,
       dueTime: '15:00',
       durationMinutes: 45,
-      priority: 'normal',
+      priority: 'medium',
       completed: false,
     },
     {
@@ -105,7 +172,7 @@ export function getInitialTasks(): TaskItem[] {
       dueDate: tomorrow,
       dueTime: '10:00',
       durationMinutes: 30,
-      priority: 'normal',
+      priority: 'low',
       completed: false,
     },
   ];
@@ -120,6 +187,7 @@ export function getInitialReminders(): ReminderItem[] {
       date: today,
       time: '12:30',
       repeat: 'daily',
+      priority: 'low',
       active: true,
       completed: false,
       note: '10 minute walk outdoors',
@@ -130,6 +198,7 @@ export function getInitialReminders(): ReminderItem[] {
       date: today,
       time: '16:30',
       repeat: 'once',
+      priority: 'high',
       active: true,
       completed: false,
     },
@@ -139,6 +208,7 @@ export function getInitialReminders(): ReminderItem[] {
       date: today,
       time: '18:30',
       repeat: 'weekdays',
+      priority: 'medium',
       active: true,
       completed: false,
     },

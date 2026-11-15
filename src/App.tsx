@@ -4,30 +4,35 @@ import {
   AlarmClock,
   Bell,
   CheckSquare,
-  Cloud,
   FileText,
   LayoutDashboard,
-  Timer,
+  Settings,
   X,
 } from 'lucide-react';
+import { AppLogo } from './components/AppLogo';
 import {
+  DEFAULT_SETTINGS,
+  doesReminderOccurOnDate,
   getInitialNotes,
   getInitialReminders,
   getInitialTasks,
   getTodayDateString,
   INITIAL_ALARMS,
+  type AppFontFamily,
+  type AppSettings,
   type ChronoAlarm,
   type NavTab,
   type NoteItem,
+  type PriorityLevel,
   type ReminderItem,
   type TaskItem,
 } from './types/chrono';
-import { DashboardSection } from './components/DashboardSection';
+import { DashboardSection, type QuickAddTarget } from './components/DashboardSection';
 import { TasksSection } from './components/TasksSection';
 import { RemindersSection } from './components/RemindersSection';
 import { AlarmsSection } from './components/AlarmsSection';
 import { NotesSection } from './components/NotesSection';
-import { BackupSection } from './components/BackupSection';
+import { SettingsSection } from './components/SettingsSection';
 import { AlarmRingOverlay } from './components/AlarmRingOverlay';
 import { soundEngine } from './utils/soundEngine';
 import { initAuth } from './utils/googleAuth';
@@ -38,6 +43,30 @@ const STORAGE_KEYS = {
   reminders: 'chrono_tempo_reminders_v2',
   alarms: 'chrono_tempo_alarms_v2',
   notes: 'chrono_tempo_notes_v2',
+  settings: 'chrono_tempo_settings_v1',
+};
+
+const FONT_STACKS: Record<AppFontFamily, { display: string; sans: string }> = {
+  jakarta: {
+    display: '"Plus Jakarta Sans", system-ui, sans-serif',
+    sans: '"DM Sans", system-ui, sans-serif',
+  },
+  manrope: {
+    display: '"Manrope", system-ui, sans-serif',
+    sans: '"Manrope", system-ui, sans-serif',
+  },
+  outfit: {
+    display: '"Outfit", system-ui, sans-serif',
+    sans: '"Outfit", system-ui, sans-serif',
+  },
+  lora: {
+    display: '"Lora", Georgia, serif',
+    sans: '"Lora", Georgia, serif',
+  },
+  mono: {
+    display: '"JetBrains Mono", ui-monospace, monospace',
+    sans: '"JetBrains Mono", ui-monospace, monospace',
+  },
 };
 
 function loadStored<T>(key: string, fallback: () => T): T {
@@ -50,6 +79,11 @@ function loadStored<T>(key: string, fallback: () => T): T {
   }
 }
 
+function normalizePriority(p?: string): PriorityLevel {
+  if (p === 'high' || p === 'medium' || p === 'low') return p;
+  return 'medium';
+}
+
 function getGreeting(hour: number): string {
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';
@@ -60,11 +94,22 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [now, setNow] = useState<Date>(() => new Date());
 
+  const [settings, setSettings] = useState<AppSettings>(() => ({
+    ...DEFAULT_SETTINGS,
+    ...loadStored(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS),
+  }));
+
   const [tasks, setTasks] = useState<TaskItem[]>(() =>
-    loadStored(STORAGE_KEYS.tasks, getInitialTasks)
+    loadStored(STORAGE_KEYS.tasks, getInitialTasks).map((t) => ({
+      ...t,
+      priority: normalizePriority(t.priority),
+    }))
   );
   const [reminders, setReminders] = useState<ReminderItem[]>(() =>
-    loadStored(STORAGE_KEYS.reminders, getInitialReminders)
+    loadStored(STORAGE_KEYS.reminders, getInitialReminders).map((r) => ({
+      ...r,
+      priority: normalizePriority(r.priority),
+    }))
   );
   const [alarms, setAlarms] = useState<ChronoAlarm[]>(() =>
     loadStored(STORAGE_KEYS.alarms, () => INITIAL_ALARMS)
@@ -72,6 +117,15 @@ export default function App() {
   const [notes, setNotes] = useState<NoteItem[]>(() =>
     loadStored(STORAGE_KEYS.notes, getInitialNotes)
   );
+
+  // Trigger counters for Dashboard '+' Quick Add actions
+  const [quickAddDate, setQuickAddDate] = useState<string | undefined>(undefined);
+  const [createTriggers, setCreateTriggers] = useState<Record<QuickAddTarget, number>>({
+    tasks: 0,
+    reminders: 0,
+    alarms: 0,
+    notes: 0,
+  });
 
   const [ringingAlarm, setRingingAlarm] = useState<ChronoAlarm | null>(null);
   const [dueReminderAlert, setDueReminderAlert] = useState<ReminderItem | null>(
@@ -97,12 +151,32 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // Persist all 4 modules to localStorage
+  // Apply theme, font size, and font family to <html>
+  useEffect(() => {
+    const root = document.documentElement;
+    if (settings.theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    root.style.fontSize = `${settings.fontSizePx}px`;
+    const stack = FONT_STACKS[settings.fontFamily] ?? FONT_STACKS.jakarta;
+    root.style.setProperty('--ct-font-display', stack.display);
+    root.style.setProperty('--ct-font-sans', stack.sans);
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
+    } catch {
+      // Ignore storage errors
+    }
+  }, [settings]);
+
+  // Persist all 4 data modules to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks));
     } catch {
-      // Ignore storage errors
+      // Ignore
     }
   }, [tasks]);
 
@@ -157,7 +231,10 @@ export default function App() {
         );
         if (matchingAlarm) {
           setRingingAlarm(matchingAlarm);
-          soundEngine.startAlarmLoop(matchingAlarm.tone);
+          soundEngine.startAlarmLoop(
+            matchingAlarm.tone,
+            matchingAlarm.customRingtoneId
+          );
         }
 
         const matchingReminder = reminders.find(
@@ -165,9 +242,7 @@ export default function App() {
             r.active &&
             !r.completed &&
             r.time === currentHHMM &&
-            (r.date === todayStr ||
-              r.repeat === 'daily' ||
-              (r.repeat === 'weekdays' && currentDay >= 1 && currentDay <= 5))
+            doesReminderOccurOnDate(r, todayStr)
         );
         if (matchingReminder) {
           setDueReminderAlert(matchingReminder);
@@ -177,6 +252,17 @@ export default function App() {
     }, 1000);
     return () => window.clearInterval(id);
   }, [alarms, reminders]);
+
+  // Quick Add handler from Dashboard '+' button
+  const handleQuickAdd = useCallback(
+    (target: QuickAddTarget, defaultDate?: string) => {
+      soundEngine.playTick(880, 0.025);
+      setQuickAddDate(defaultDate);
+      setActiveTab(target);
+      setCreateTriggers((prev) => ({ ...prev, [target]: prev[target] + 1 }));
+    },
+    []
+  );
 
   // Task CRUD handlers
   const handleToggleTask = useCallback((id: string) => {
@@ -270,7 +356,7 @@ export default function App() {
 
   const handleTriggerTestRing = useCallback((alarm: ChronoAlarm) => {
     setRingingAlarm(alarm);
-    soundEngine.startAlarmLoop(alarm.tone);
+    soundEngine.startAlarmLoop(alarm.tone, alarm.customRingtoneId);
   }, []);
 
   const handleDismissAlarm = useCallback(() => {
@@ -292,6 +378,8 @@ export default function App() {
           enabled: true,
           days: [],
           tone: ringingAlarm.tone,
+          customRingtoneId: ringingAlarm.customRingtoneId,
+          customRingtoneName: ringingAlarm.customRingtoneName,
         },
       ]);
     }
@@ -337,8 +425,18 @@ export default function App() {
   }, []);
 
   const handleRestoreBackup = useCallback((payload: ChronoBackupPayload) => {
-    setTasks(payload.data.tasks);
-    setReminders(payload.data.reminders);
+    setTasks(
+      payload.data.tasks.map((t) => ({
+        ...t,
+        priority: normalizePriority(t.priority),
+      }))
+    );
+    setReminders(
+      payload.data.reminders.map((r) => ({
+        ...r,
+        priority: normalizePriority(r.priority),
+      }))
+    );
     setAlarms(payload.data.alarms);
     setNotes(payload.data.notes);
   }, []);
@@ -398,7 +496,7 @@ export default function App() {
 
   const desktopNavItems = [
     ...primaryNavItems,
-    { id: 'backup' as NavTab, label: 'Google Backup', mobileLabel: 'Backup', icon: Cloud },
+    { id: 'settings' as NavTab, label: 'Settings', mobileLabel: 'Settings', icon: Settings },
   ];
 
   const today = getTodayDateString();
@@ -407,40 +505,38 @@ export default function App() {
   ).length;
 
   return (
-    <div className="min-h-screen bg-[#090A0F] text-[#F8FAFC] flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-[#F4F6FB] dark:bg-[#090A0F] text-slate-900 dark:text-[#F8FAFC] flex flex-col lg:flex-row transition-colors duration-200">
       {/* Desktop Left Sidebar */}
-      <aside className="hidden lg:flex lg:w-[272px] lg:shrink-0 lg:flex-col lg:justify-between bg-[#12141F] border-r border-white/[0.08] p-6 sticky top-0 h-screen">
+      <aside className="hidden lg:flex lg:w-[272px] lg:shrink-0 lg:flex-col lg:justify-between bg-white dark:bg-[#12141F] border-r border-slate-200 dark:border-white/[0.08] p-6 sticky top-0 h-screen overflow-y-auto">
         <div>
           {/* Wordmark */}
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-[#6366F1] to-[#818CF8] shadow-[0_0_20px_rgba(99,102,241,0.45)]">
-              <Timer className="h-5 w-5 text-white" />
-            </div>
-            <span className="font-display text-lg font-bold tracking-tight text-[#F8FAFC]">
-              Chrono Tempo
+            <AppLogo className="h-9 w-9" />
+            <span className="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-[#F8FAFC]">
+              Kairo
             </span>
           </div>
 
           {/* Live Clock */}
-          <div className="mt-8 pb-6 border-b border-white/[0.06]">
-            <p className="text-xs font-medium text-[#94A3B8]">
+          <div className="mt-7 pb-5 border-b border-slate-200 dark:border-white/[0.06]">
+            <p className="text-xs font-medium text-slate-500 dark:text-[#94A3B8]">
               {clockDisplay.dateLabel}
             </p>
             <div className="mt-2 flex items-baseline gap-1.5 font-mono tabular-nums">
-              <span className="text-4xl font-semibold tracking-tight text-[#F8FAFC]">
+              <span className="text-4xl font-semibold tracking-tight text-slate-900 dark:text-[#F8FAFC]">
                 {clockDisplay.hm}
               </span>
-              <span className="text-sm font-medium text-[#64748B]">
+              <span className="text-sm font-medium text-slate-400 dark:text-[#64748B]">
                 :{clockDisplay.sec}
               </span>
-              <span className="ml-1 text-xs font-semibold text-[#818CF8]">
+              <span className="ml-1 text-xs font-semibold text-indigo-600 dark:text-[#818CF8]">
                 {clockDisplay.period}
               </span>
             </div>
           </div>
 
           {/* Clear Navigation */}
-          <nav aria-label="Primary sections" className="mt-6 flex flex-col gap-1.5">
+          <nav aria-label="Primary sections" className="mt-5 flex flex-col gap-1">
             {desktopNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -452,119 +548,109 @@ export default function App() {
                     soundEngine.playTick(820, 0.02);
                     setActiveTab(item.id);
                   }}
-                  className={`flex h-12 items-center gap-3 rounded-2xl px-4 text-sm font-medium transition-all cursor-pointer ${
+                  className={`flex min-h-[44px] items-center gap-3 rounded-2xl px-4 py-2 text-sm font-medium transition-all cursor-pointer ${
                     isActive
-                      ? 'bg-[#1A1D2D] text-[#F8FAFC] border border-white/12 shadow-[0_0_20px_rgba(99,102,241,0.12)]'
-                      : 'text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-white/[0.03] border border-transparent'
+                      ? 'bg-indigo-50 dark:bg-[#1A1D2D] text-indigo-700 dark:text-[#F8FAFC] border border-indigo-200 dark:border-white/12 shadow-xs dark:shadow-[0_0_20px_rgba(99,102,241,0.12)]'
+                      : 'text-slate-600 dark:text-[#94A3B8] hover:text-slate-900 dark:hover:text-[#F8FAFC] hover:bg-slate-100 dark:hover:bg-white/[0.03] border border-transparent'
                   }`}
                 >
                   <Icon
-                    className={`h-4 w-4 ${
-                      isActive ? 'text-[#818CF8]' : 'text-[#64748B]'
+                    className={`h-4 w-4 shrink-0 ${
+                      isActive
+                        ? 'text-indigo-600 dark:text-[#818CF8]'
+                        : 'text-slate-400 dark:text-[#64748B]'
                     }`}
                   />
-                  <span>{item.label}</span>
+                  <span className="truncate">{item.label}</span>
                 </button>
               );
             })}
           </nav>
         </div>
 
-        {/* Quiet Temporal & Google Backup Summary */}
-        <div className="pt-5 border-t border-white/[0.06] flex flex-col gap-2.5 text-xs">
+        {/* Quiet Temporal Summary */}
+        <div className="pt-5 mt-4 border-t border-slate-200 dark:border-white/[0.06] flex flex-col gap-2.5 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-[#64748B]">Next alarm</span>
-            <span className="font-mono font-medium text-[#F59E0B] tabular-nums">
+            <span className="text-slate-500 dark:text-[#64748B]">Next alarm</span>
+            <span className="font-mono font-medium text-amber-600 dark:text-[#F59E0B] tabular-nums">
               {nextAlarmLabel}
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-[#64748B]">Tasks due today</span>
-            <span className="font-mono font-medium text-[#34D399] tabular-nums">
+            <span className="text-slate-500 dark:text-[#64748B]">Tasks due today</span>
+            <span className="font-mono font-medium text-emerald-600 dark:text-[#34D399] tabular-nums">
               {todayTasksRemaining} left
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => setActiveTab('backup')}
-            className="mt-1 flex items-center justify-between rounded-xl bg-white/[0.03] px-3 py-2 text-left hover:bg-white/[0.06] transition-colors cursor-pointer"
-          >
-            <span className="text-[#94A3B8] truncate">
-              {needsGoogleAuth ? 'Google Drive Backup' : googleUser?.email ?? 'Drive Connected'}
-            </span>
-            <span
-              className={`shrink-0 font-medium ${
-                needsGoogleAuth ? 'text-[#818CF8]' : 'text-[#34D399]'
-              }`}
-            >
-              {needsGoogleAuth ? 'Connect' : 'Synced'}
-            </span>
-          </button>
         </div>
       </aside>
 
-      {/* Mobile Compact Header */}
-      <header className="lg:hidden sticky top-0 z-30 bg-[#090A0F]/85 backdrop-blur-xl border-b border-white/[0.06] px-4 py-2.5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#6366F1] to-[#818CF8]">
-            <Timer className="h-4 w-4 text-white" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="font-display text-base font-semibold leading-tight text-[#F8FAFC] truncate">
-              {desktopNavItems.find((n) => n.id === activeTab)?.label ?? 'Dashboard'}
+      {/* Mobile Compact Header with OS Status Bar Safe Area */}
+      <header className="lg:hidden sticky top-0 z-30 bg-[#F4F6FB]/92 dark:bg-[#090A0F]/92 backdrop-blur-xl border-b border-slate-200 dark:border-white/[0.06] px-4 safe-top-header flex items-center justify-between gap-2 min-h-[60px]">
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          <AppLogo className="h-8 w-8" />
+          <div className="min-w-0 flex-1">
+            <h1 className="font-display text-base font-semibold leading-snug text-slate-900 dark:text-[#F8FAFC] truncate">
+              {activeTab === 'dashboard'
+                ? 'Kairo'
+                : (desktopNavItems.find((n) => n.id === activeTab)?.label ?? 'Kairo')}
             </h1>
-            <p className="text-[11px] text-[#94A3B8] truncate">{clockDisplay.dateLabel}</p>
+            <p className="text-[11px] leading-snug text-slate-500 dark:text-[#94A3B8] truncate">
+              {clockDisplay.dateLabel}
+            </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="text-right font-mono tabular-nums">
-            <div className="text-sm font-semibold text-[#F8FAFC] leading-tight">
+        <div className="flex items-center gap-1.5 shrink-0">
+          <div className="text-right font-mono tabular-nums mr-1">
+            <div className="text-sm font-semibold text-slate-900 dark:text-[#F8FAFC] leading-snug">
               {clockDisplay.hm}{' '}
-              <span className="text-[11px] text-[#818CF8]">{clockDisplay.period}</span>
+              <span className="text-[11px] text-indigo-600 dark:text-[#818CF8]">
+                {clockDisplay.period}
+              </span>
             </div>
-            <div className="text-[10px] text-[#F59E0B]">Alarm · {nextAlarmLabel}</div>
+            <div className="text-[10px] leading-snug text-amber-600 dark:text-[#F59E0B]">
+              {nextAlarmLabel}
+            </div>
           </div>
 
           <button
             type="button"
             onClick={() => {
               soundEngine.playTick(820, 0.02);
-              setActiveTab('backup');
+              setActiveTab('settings');
             }}
-            aria-label="Google Drive Backup"
-            className={`flex h-11 w-11 items-center justify-center rounded-full border transition-colors cursor-pointer ${
-              activeTab === 'backup'
-                ? 'bg-[#6366F1]/25 border-[#6366F1]/50 text-[#c0c1ff]'
-                : needsGoogleAuth
-                  ? 'bg-white/[0.04] border-white/10 text-[#94A3B8]'
-                  : 'bg-[#10B981]/15 border-[#10B981]/40 text-[#34D399]'
+            aria-label="Settings"
+            className={`flex h-10 w-10 items-center justify-center rounded-full border transition-colors cursor-pointer ${
+              activeTab === 'settings'
+                ? 'bg-indigo-50 dark:bg-[#6366F1]/25 border-indigo-300 dark:border-[#6366F1]/50 text-indigo-700 dark:text-[#c0c1ff]'
+                : 'bg-white dark:bg-white/[0.04] border-slate-200 dark:border-white/10 text-slate-600 dark:text-[#94A3B8]'
             }`}
           >
-            <Cloud className="h-4 w-4" />
+            <Settings className="h-4 w-4" />
           </button>
         </div>
       </header>
 
       {/* Main Content Workspace */}
-      <main className="flex-1 min-w-0 px-5 pt-6 pb-28 lg:px-10 lg:py-8">
+      <main className="flex-1 min-w-0 px-4 sm:px-6 pt-5 pb-32 lg:px-10 lg:py-8">
         <div className="mx-auto max-w-6xl">
           {/* Desktop Page Header */}
           <div className="hidden lg:flex items-end justify-between mb-8">
             <div>
-              <p className="text-xs font-medium text-[#818CF8]">
+              <p className="text-xs font-medium text-indigo-600 dark:text-[#818CF8]">
                 {clockDisplay.greeting}
               </p>
-              <h1 className="mt-1 text-3xl font-bold tracking-tight text-[#F8FAFC] text-balance">
-                {activeTab === 'dashboard' && "Today's Activities"}
+              <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900 dark:text-[#F8FAFC] text-balance">
+                {activeTab === 'dashboard' && 'Daily Overview'}
                 {activeTab === 'tasks' && 'Tasks'}
                 {activeTab === 'reminders' && 'Reminders'}
                 {activeTab === 'alarms' && 'Alarms'}
                 {activeTab === 'notes' && 'Notes'}
-                {activeTab === 'backup' && 'Google Drive Backup'}
+                {activeTab === 'settings' && 'Settings'}
               </h1>
             </div>
-            <p className="text-sm text-[#94A3B8] tabular-nums">
+            <p className="text-sm text-slate-600 dark:text-[#94A3B8] tabular-nums">
               {clockDisplay.dateLabel} · {todayTasksRemaining} tasks remaining today
             </p>
           </div>
@@ -573,15 +659,15 @@ export default function App() {
           {dueReminderAlert && (
             <div
               role="status"
-              className="mb-6 flex items-center justify-between gap-4 rounded-2xl bg-[#10B981]/15 border border-[#10B981]/40 px-4 py-3"
+              className="mb-6 flex items-center justify-between gap-4 rounded-2xl bg-emerald-50 dark:bg-[#10B981]/15 border border-emerald-300 dark:border-[#10B981]/40 px-4 py-3"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <Bell className="h-4 w-4 text-[#34D399] shrink-0" />
+                <Bell className="h-4 w-4 text-emerald-600 dark:text-[#34D399] shrink-0" />
                 <div className="min-w-0">
-                  <p className="text-xs font-semibold text-[#34D399]">
+                  <p className="text-xs font-semibold text-emerald-700 dark:text-[#34D399]">
                     Reminder · {dueReminderAlert.time}
                   </p>
-                  <p className="truncate text-sm font-medium text-[#F8FAFC]">
+                  <p className="truncate text-sm font-medium text-slate-900 dark:text-[#F8FAFC]">
                     {dueReminderAlert.title}
                   </p>
                 </div>
@@ -593,7 +679,7 @@ export default function App() {
                     handleToggleReminderDone(dueReminderAlert.id);
                     setDueReminderAlert(null);
                   }}
-                  className="h-9 rounded-full bg-[#10B981] px-3.5 text-xs font-semibold text-[#090A0F] cursor-pointer"
+                  className="h-9 rounded-full bg-[#10B981] px-3.5 text-xs font-semibold text-white dark:text-[#090A0F] cursor-pointer"
                 >
                   Mark Done
                 </button>
@@ -601,7 +687,7 @@ export default function App() {
                   type="button"
                   onClick={() => setDueReminderAlert(null)}
                   aria-label="Dismiss reminder banner"
-                  className="flex h-9 w-9 items-center justify-center rounded-full text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-slate-500 dark:text-[#94A3B8] hover:text-slate-900 dark:hover:text-[#F8FAFC] cursor-pointer"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -617,6 +703,7 @@ export default function App() {
               alarms={alarms}
               notes={notes}
               onNavigate={setActiveTab}
+              onQuickAdd={handleQuickAdd}
               onToggleTask={handleToggleTask}
               onToggleReminderDone={handleToggleReminderDone}
               onToggleAlarm={handleToggleAlarm}
@@ -626,6 +713,8 @@ export default function App() {
           {activeTab === 'tasks' && (
             <TasksSection
               tasks={tasks}
+              autoOpenCreateKey={createTriggers.tasks}
+              defaultCreateDate={quickAddDate}
               onToggleTask={handleToggleTask}
               onCreateTask={handleCreateTask}
               onUpdateTask={handleUpdateTask}
@@ -636,6 +725,8 @@ export default function App() {
           {activeTab === 'reminders' && (
             <RemindersSection
               reminders={reminders}
+              autoOpenCreateKey={createTriggers.reminders}
+              defaultCreateDate={quickAddDate}
               onCreateReminder={handleCreateReminder}
               onUpdateReminder={handleUpdateReminder}
               onDeleteReminder={handleDeleteReminder}
@@ -647,6 +738,7 @@ export default function App() {
           {activeTab === 'alarms' && (
             <AlarmsSection
               alarms={alarms}
+              autoOpenCreateKey={createTriggers.alarms}
               onToggleAlarm={handleToggleAlarm}
               onSaveAlarm={handleSaveAlarm}
               onDeleteAlarm={handleDeleteAlarm}
@@ -657,6 +749,7 @@ export default function App() {
           {activeTab === 'notes' && (
             <NotesSection
               notes={notes}
+              autoOpenCreateKey={createTriggers.notes}
               onCreateNote={handleCreateNote}
               onUpdateNote={handleUpdateNote}
               onDeleteNote={handleDeleteNote}
@@ -664,10 +757,12 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'backup' && (
-            <BackupSection
-              user={googleUser}
-              needsAuth={needsGoogleAuth}
+          {activeTab === 'settings' && (
+            <SettingsSection
+              settings={settings}
+              onUpdateSettings={setSettings}
+              googleUser={googleUser}
+              needsGoogleAuth={needsGoogleAuth}
               onAuthUpdated={(user, needs) => {
                 setGoogleUser(user);
                 setNeedsGoogleAuth(needs);
@@ -685,9 +780,9 @@ export default function App() {
       {/* Mobile Fixed Bottom Thumb Navigation Bar */}
       <nav
         aria-label="Mobile navigation"
-        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#12141F]/90 backdrop-blur-xl border-t border-white/[0.08] px-1 pb-[env(safe-area-inset-bottom)]"
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/94 dark:bg-[#12141F]/92 backdrop-blur-xl border-t border-slate-200 dark:border-white/[0.08] px-1 pt-1.5 safe-bottom-nav"
       >
-        <div className="grid grid-cols-5 h-16 items-center">
+        <div className="grid grid-cols-5 min-h-[58px] items-center">
           {primaryNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -699,16 +794,20 @@ export default function App() {
                   soundEngine.playTick(820, 0.02);
                   setActiveTab(item.id);
                 }}
-                className="flex min-h-[48px] flex-col items-center justify-center gap-1 cursor-pointer"
+                className="flex min-h-[48px] flex-col items-center justify-center gap-1 px-1 py-1 cursor-pointer"
               >
                 <Icon
-                  className={`h-5 w-5 transition-colors ${
-                    isActive ? 'text-[#818CF8]' : 'text-[#64748B]'
+                  className={`h-5 w-5 shrink-0 transition-colors ${
+                    isActive
+                      ? 'text-indigo-600 dark:text-[#818CF8]'
+                      : 'text-slate-400 dark:text-[#64748B]'
                   }`}
                 />
                 <span
-                  className={`text-[10px] font-medium tracking-tight ${
-                    isActive ? 'text-[#F8FAFC]' : 'text-[#94A3B8]'
+                  className={`text-[10px] leading-tight font-medium tracking-tight truncate max-w-full ${
+                    isActive
+                      ? 'text-slate-900 dark:text-[#F8FAFC]'
+                      : 'text-slate-500 dark:text-[#94A3B8]'
                   }`}
                 >
                   {item.mobileLabel}

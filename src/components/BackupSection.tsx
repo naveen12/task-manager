@@ -241,7 +241,6 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
     }
   };
 
-  // Offline local JSON export/import helpers
   const handleLocalExport = () => {
     soundEngine.playTick(920, 0.025);
     const payload = buildBackupPayload({ tasks, reminders, alarms, notes });
@@ -272,7 +271,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
         !Array.isArray(parsed.data.alarms) ||
         !Array.isArray(parsed.data.notes)
       ) {
-        throw new Error('Selected file is not a valid Chrono Tempo backup JSON.');
+        throw new Error('Selected file is not a valid Kairo backup JSON.');
       }
       setConfirmAction({
         type: 'restoreLocal',
@@ -288,24 +287,20 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
 
   return (
     <section className="flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-[#F8FAFC] tracking-tight">
-            Google Drive Backup
-          </h2>
-          <p className="text-xs text-[#94A3B8] tabular-nums mt-0.5">
-            Current local snapshot · {tasks.length} tasks · {reminders.length} reminders ·{' '}
-            {alarms.length} alarms · {notes.length} notes
-          </p>
-        </div>
+      <div>
+        <h2 className="text-xl font-semibold text-slate-900 dark:text-[#F8FAFC] tracking-tight">
+          Google Drive Backup
+        </h2>
+        <p className="text-xs text-slate-600 dark:text-[#94A3B8] tabular-nums mt-0.5">
+          Current local snapshot · {tasks.length} tasks · {reminders.length} reminders ·{' '}
+          {alarms.length} alarms · {notes.length} notes
+        </p>
       </div>
 
-      {/* Feedback Banners */}
       {statusMessage && (
         <div
           role="status"
-          className="flex items-center gap-2.5 rounded-2xl bg-[#10B981]/15 border border-[#10B981]/35 px-4 py-3 text-sm text-[#34D399]"
+          className="flex items-center gap-2.5 rounded-2xl bg-emerald-50 dark:bg-[#10B981]/15 border border-emerald-300 dark:border-[#10B981]/35 px-4 py-3 text-sm text-emerald-700 dark:text-[#34D399]"
         >
           <CheckCircle2 className="h-4 w-4 shrink-0" />
           <span>{statusMessage}</span>
@@ -315,7 +310,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
       {errorMessage && (
         <div
           role="alert"
-          className="flex items-center gap-2.5 rounded-2xl bg-[#93000a]/30 border border-[#ffb4ab]/35 px-4 py-3 text-sm text-[#ffb4ab]"
+          className="flex items-center gap-2.5 rounded-2xl bg-red-50 dark:bg-[#93000a]/30 border border-red-300 dark:border-[#ffb4ab]/35 px-4 py-3 text-sm text-red-700 dark:text-[#ffb4ab]"
         >
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>{errorMessage}</span>
@@ -323,30 +318,29 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
       )}
 
       {/* Google Account Connection Card */}
-      <div className="rounded-[28px] bg-[#1A1D2D]/80 backdrop-blur-xl border border-white/[0.08] p-6">
+      <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/80 backdrop-blur-xl border border-slate-200 dark:border-white/[0.08] p-6 shadow-sm dark:shadow-none">
         {needsAuth ? (
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
             <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#6366F1]/15 text-[#818CF8] border border-[#6366F1]/30">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 dark:bg-[#6366F1]/15 text-indigo-600 dark:text-[#818CF8] border border-indigo-200 dark:border-[#6366F1]/30">
                 <Cloud className="h-6 w-6" />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-[#F8FAFC]">
+                <h3 className="text-base font-semibold text-slate-900 dark:text-[#F8FAFC]">
                   Connect your Google Account
                 </h3>
-                <p className="mt-1 text-sm text-[#94A3B8] max-w-xl">
-                  Sign in with Google to save, view, overwrite, and restore Chrono Tempo
+                <p className="mt-1 text-sm text-slate-600 dark:text-[#94A3B8] max-w-xl">
+                  Sign in with Google to save, view, overwrite, and restore Kairo
                   backup files directly in your Google Drive.
                 </p>
               </div>
             </div>
 
-            {/* Official Google Sign-In Button Style */}
             <button
               type="button"
               onClick={handleGoogleLogin}
               disabled={isSigningIn}
-              className="inline-flex h-11 shrink-0 items-center justify-center gap-3 rounded-full bg-white px-5 text-sm font-medium text-[#1f1f1f] shadow-md hover:bg-[#f8f9fa] active:scale-[0.98] disabled:opacity-60 transition-all cursor-pointer"
+              className="inline-flex h-11 shrink-0 items-center justify-center gap-3 rounded-full bg-white px-5 text-sm font-medium text-[#1f1f1f] border border-slate-300 dark:border-transparent shadow-md hover:bg-[#f8f9fa] active:scale-[0.98] disabled:opacity-60 transition-all cursor-pointer"
             >
               <svg
                 className="h-5 w-5 shrink-0"
@@ -378,26 +372,25 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
           </div>
         ) : (
           <div className="flex flex-col gap-6">
-            {/* Connected Profile Strip */}
-            <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-white/[0.06]">
+            <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-white/[0.06]">
               <div className="flex items-center gap-3.5 min-w-0">
                 {user?.photoURL ? (
                   <img
                     src={user.photoURL}
                     alt={user.displayName ?? 'Google account avatar'}
                     referrerPolicy="no-referrer"
-                    className="h-11 w-11 rounded-full object-cover border border-white/15 shrink-0"
+                    className="h-11 w-11 rounded-full object-cover border border-slate-200 dark:border-white/15 shrink-0"
                   />
                 ) : (
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#6366F1]/25 text-sm font-semibold text-[#c0c1ff] border border-[#6366F1]/40">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-indigo-50 dark:bg-[#6366F1]/25 text-sm font-semibold text-indigo-700 dark:text-[#c0c1ff] border border-indigo-200 dark:border-[#6366F1]/40">
                     {(user?.displayName ?? user?.email ?? 'G')[0]?.toUpperCase()}
                   </div>
                 )}
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-[#F8FAFC]">
+                  <p className="truncate text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
                     {user?.displayName ?? 'Google Account'}
                   </p>
-                  <p className="truncate text-xs text-[#94A3B8]">
+                  <p className="truncate text-xs text-slate-600 dark:text-[#94A3B8]">
                     {user?.email ?? 'Connected to Google Drive'}
                   </p>
                 </div>
@@ -408,7 +401,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                   type="button"
                   onClick={() => void fetchBackups()}
                   disabled={isLoadingList}
-                  className="flex h-10 items-center gap-2 rounded-full bg-white/[0.05] px-4 text-xs font-medium text-[#F8FAFC] border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+                  className="flex h-10 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
                 >
                   <RefreshCw
                     className={`h-3.5 w-3.5 ${isLoadingList ? 'animate-spin' : ''}`}
@@ -418,7 +411,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                 <button
                   type="button"
                   onClick={handleSignOut}
-                  className="flex h-10 items-center gap-2 rounded-full bg-white/[0.05] px-4 text-xs font-medium text-[#94A3B8] border border-white/10 hover:text-[#F8FAFC] hover:bg-white/10 transition-colors cursor-pointer"
+                  className="flex h-10 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-600 dark:text-[#94A3B8] border border-slate-200 dark:border-white/10 hover:text-slate-900 dark:hover:text-[#F8FAFC] transition-colors cursor-pointer"
                 >
                   <LogOut className="h-3.5 w-3.5" />
                   Sign out
@@ -426,7 +419,6 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
               </div>
             </div>
 
-            {/* Create New Drive Backup Form */}
             <form
               onSubmit={handleCreateBackup}
               className="flex flex-col sm:flex-row sm:items-end gap-3"
@@ -434,7 +426,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
               <div className="flex-1">
                 <label
                   htmlFor="backup-filename-input"
-                  className="block text-xs font-medium text-[#94A3B8] mb-1.5"
+                  className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
                 >
                   Backup Filename (Google Drive)
                 </label>
@@ -444,55 +436,54 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                   value={backupName}
                   onChange={(e) => setBackupName(e.target.value)}
                   required
-                  className="h-[48px] w-full rounded-2xl bg-[#161926] px-4 font-mono text-sm text-[#F8FAFC] border border-white/[0.08] focus:border-[#6366F1] focus:outline-none"
+                  className="min-h-[48px] w-full rounded-2xl bg-slate-50 dark:bg-[#161926] px-4 font-mono text-sm text-slate-900 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/[0.08] focus:border-[#6366F1] focus:outline-none"
                 />
               </div>
               <button
                 type="submit"
                 disabled={isSaving}
-                className="flex h-[48px] items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#6366F1] to-[#818CF8] px-6 text-xs font-semibold text-white shadow-[0_0_20px_rgba(99,102,241,0.4),inset_0_1px_0_rgba(255,255,255,0.3)] active:scale-[0.98] disabled:opacity-60 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                className="flex min-h-[48px] items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#6366F1] to-[#818CF8] px-6 text-xs font-semibold text-white shadow-[0_0_20px_rgba(99,102,241,0.4),inset_0_1px_0_rgba(255,255,255,0.3)] active:scale-[0.98] disabled:opacity-60 transition-all whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <CloudUpload className="h-4 w-4" />
                 {isSaving ? 'Backing up...' : 'Save Backup to Drive'}
               </button>
             </form>
 
-            {/* Stored Google Drive Backup Files */}
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-[#F8FAFC]">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
                   Stored Drive Backups
                 </h3>
-                <span className="text-xs text-[#94A3B8] tabular-nums">
+                <span className="text-xs text-slate-600 dark:text-[#94A3B8] tabular-nums">
                   {backups.length} file{backups.length === 1 ? '' : 's'}
                 </span>
               </div>
 
               {isLoadingList ? (
-                <div className="rounded-2xl bg-[#12141F] border border-white/[0.06] p-6 text-center text-xs text-[#94A3B8]">
+                <div className="rounded-2xl bg-slate-50 dark:bg-[#12141F] border border-slate-200 dark:border-white/[0.06] p-6 text-center text-xs text-slate-600 dark:text-[#94A3B8]">
                   Loading backups from Google Drive...
                 </div>
               ) : backups.length === 0 ? (
-                <div className="rounded-2xl bg-[#12141F] border border-white/[0.06] p-6 text-center">
-                  <p className="text-sm font-medium text-[#F8FAFC]">
+                <div className="rounded-2xl bg-slate-50 dark:bg-[#12141F] border border-slate-200 dark:border-white/[0.06] p-6 text-center">
+                  <p className="text-sm font-medium text-slate-900 dark:text-[#F8FAFC]">
                     No backup files in Google Drive yet
                   </p>
-                  <p className="mt-1 text-xs text-[#64748B]">
+                  <p className="mt-1 text-xs text-slate-500 dark:text-[#64748B]">
                     Click &ldquo;Save Backup to Drive&rdquo; above to store your first snapshot.
                   </p>
                 </div>
               ) : (
-                <div className="divide-y divide-white/[0.06] rounded-2xl bg-[#12141F] border border-white/[0.06]">
+                <div className="divide-y divide-slate-200 dark:divide-white/[0.06] rounded-2xl bg-slate-50 dark:bg-[#12141F] border border-slate-200 dark:border-white/[0.06]">
                   {backups.map((file) => (
                     <div
                       key={file.id}
                       className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4"
                     >
                       <div className="min-w-0">
-                        <p className="truncate font-mono text-sm font-medium text-[#F8FAFC]">
+                        <p className="truncate font-mono text-sm font-medium text-slate-900 dark:text-[#F8FAFC]">
                           {file.name}
                         </p>
-                        <p className="mt-0.5 text-xs text-[#94A3B8] tabular-nums">
+                        <p className="mt-0.5 text-xs text-slate-600 dark:text-[#94A3B8] tabular-nums">
                           {formatModified(file.modifiedTime)} · {formatFileSize(file.size)}
                         </p>
                       </div>
@@ -503,7 +494,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                           onClick={() =>
                             setConfirmAction({ type: 'restore', file })
                           }
-                          className="flex h-10 items-center gap-1.5 rounded-full bg-[#10B981]/15 px-3.5 text-xs font-semibold text-[#34D399] border border-[#10B981]/35 hover:bg-[#10B981]/25 transition-colors cursor-pointer"
+                          className="flex h-10 items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-[#10B981]/15 px-3.5 text-xs font-semibold text-emerald-700 dark:text-[#34D399] border border-emerald-300 dark:border-[#10B981]/35 hover:bg-emerald-100 dark:hover:bg-[#10B981]/25 transition-colors cursor-pointer"
                         >
                           <RotateCcw className="h-3.5 w-3.5" />
                           Restore
@@ -514,9 +505,9 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                           onClick={() =>
                             setConfirmAction({ type: 'overwrite', file })
                           }
-                          className="flex h-10 items-center gap-1.5 rounded-full bg-white/[0.05] px-3.5 text-xs font-medium text-[#F8FAFC] border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+                          className="flex h-10 items-center gap-1.5 rounded-full bg-white dark:bg-white/[0.05] px-3.5 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer"
                         >
-                          <CloudUpload className="h-3.5 w-3.5 text-[#818CF8]" />
+                          <CloudUpload className="h-3.5 w-3.5 text-indigo-600 dark:text-[#818CF8]" />
                           Overwrite
                         </button>
 
@@ -526,7 +517,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                             setConfirmAction({ type: 'delete', file })
                           }
                           aria-label={`Delete ${file.name}`}
-                          className="flex h-10 w-10 items-center justify-center rounded-full text-[#64748B] hover:bg-white/[0.06] hover:text-[#ffb4ab] transition-colors cursor-pointer"
+                          className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 dark:text-[#64748B] hover:bg-red-50 dark:hover:bg-white/[0.06] hover:text-red-600 dark:hover:text-[#ffb4ab] transition-colors cursor-pointer"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -541,12 +532,12 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
       </div>
 
       {/* Local JSON Export / Import Card */}
-      <div className="rounded-[28px] bg-[#1A1D2D]/60 border border-white/[0.08] p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/60 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs dark:shadow-none">
         <div>
-          <h3 className="text-sm font-semibold text-[#F8FAFC]">
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
             Local File Export & Import
           </h3>
-          <p className="mt-0.5 text-xs text-[#94A3B8]">
+          <p className="mt-0.5 text-xs text-slate-600 dark:text-[#94A3B8]">
             Download an offline JSON copy or restore from a local backup file.
           </p>
         </div>
@@ -555,14 +546,14 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
           <button
             type="button"
             onClick={handleLocalExport}
-            className="flex h-11 items-center gap-2 rounded-full bg-white/[0.05] px-4 text-xs font-medium text-[#F8FAFC] border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+            className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
           >
-            <Download className="h-4 w-4 text-[#818CF8]" />
+            <Download className="h-4 w-4 text-indigo-600 dark:text-[#818CF8]" />
             Export JSON
           </button>
 
-          <label className="flex h-11 items-center gap-2 rounded-full bg-white/[0.05] px-4 text-xs font-medium text-[#F8FAFC] border border-white/10 hover:bg-white/10 transition-colors cursor-pointer">
-            <Upload className="h-4 w-4 text-[#34D399]" />
+          <label className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer">
+            <Upload className="h-4 w-4 text-emerald-600 dark:text-[#34D399]" />
             <span>Import JSON</span>
             <input
               type="file"
@@ -574,18 +565,18 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
         </div>
       </div>
 
-      {/* Explicit Confirmation Modal for Destructive / Mutating Operations */}
+      {/* Confirmation Modal */}
       {confirmAction && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="backup-confirm-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[#090A0F]/85 backdrop-blur-md p-5"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 dark:bg-[#090A0F]/85 backdrop-blur-md p-5"
         >
-          <div className="w-full max-w-md rounded-[28px] bg-[#1A1D2D] border border-white/15 p-6 shadow-2xl">
+          <div className="w-full max-w-md rounded-[28px] bg-white dark:bg-[#1A1D2D] border border-slate-200 dark:border-white/15 p-6 shadow-2xl">
             <h3
               id="backup-confirm-title"
-              className="text-lg font-semibold text-[#F8FAFC]"
+              className="text-lg font-semibold text-slate-900 dark:text-[#F8FAFC]"
             >
               {confirmAction.type === 'delete' && 'Delete Backup from Google Drive?'}
               {confirmAction.type === 'overwrite' && 'Overwrite Google Drive Backup?'}
@@ -594,7 +585,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                 'Restore Backup Data?'}
             </h3>
 
-            <p className="mt-2 text-sm leading-relaxed text-[#94A3B8]">
+            <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-[#94A3B8]">
               {confirmAction.type === 'delete' &&
                 `This will permanently delete "${confirmAction.file.name}" from your Google Drive. This action cannot be undone.`}
               {confirmAction.type === 'overwrite' &&
@@ -610,7 +601,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                 type="button"
                 disabled={isMutating}
                 onClick={() => setConfirmAction(null)}
-                className="h-11 rounded-full px-5 text-xs font-medium text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
+                className="h-11 rounded-full px-5 text-xs font-medium text-slate-600 dark:text-[#94A3B8] hover:text-slate-900 dark:hover:text-[#F8FAFC] cursor-pointer"
               >
                 Cancel
               </button>
@@ -620,10 +611,10 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
                 onClick={() => void executeConfirmedAction()}
                 className={`h-11 rounded-full px-6 text-xs font-semibold transition-all cursor-pointer ${
                   confirmAction.type === 'delete'
-                    ? 'bg-[#ffb4ab] text-[#690005]'
+                    ? 'bg-red-600 text-white dark:bg-[#ffb4ab] dark:text-[#690005]'
                     : confirmAction.type === 'restore' ||
                         confirmAction.type === 'restoreLocal'
-                      ? 'bg-[#10B981] text-[#090A0F]'
+                      ? 'bg-[#10B981] text-white dark:text-[#090A0F]'
                       : 'bg-gradient-to-r from-[#6366F1] to-[#818CF8] text-white'
                 }`}
               >

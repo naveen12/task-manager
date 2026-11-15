@@ -6,7 +6,7 @@ import type {
 } from '../types/chrono';
 
 export interface ChronoBackupPayload {
-  app: 'Chrono Tempo';
+  app: 'Kairo' | 'Chrono Tempo';
   version: 1;
   createdAt: string;
   counts: {
@@ -57,7 +57,7 @@ export function buildBackupPayload(input: {
   notes: NoteItem[];
 }): ChronoBackupPayload {
   return {
-    app: 'Chrono Tempo',
+    app: 'Kairo',
     version: 1,
     createdAt: new Date().toISOString(),
     counts: {
@@ -82,7 +82,7 @@ export function formatDefaultBackupFilename(): string {
   const day = String(d.getDate()).padStart(2, '0');
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
-  return `chrono-tempo-backup-${y}-${m}-${day}-${hh}${mm}.json`;
+  return `kairo-backup-${y}-${m}-${day}-${hh}${mm}.json`;
 }
 
 export async function listDriveBackups(
@@ -112,12 +112,12 @@ export async function createDriveBackup(
 ): Promise<DriveBackupFile> {
   const safeName = fileName.trim().endsWith('.json')
     ? fileName.trim()
-    : `${fileName.trim() || 'chrono-tempo-backup'}.json`;
+    : `${fileName.trim() || 'kairo-backup'}.json`;
 
   const metadata = {
     name: safeName,
     mimeType: 'application/json',
-    description: 'Chrono Tempo backup archive (Tasks, Reminders, Alarms, Notes)',
+    description: 'Kairo backup archive (Tasks, Reminders, Alarms, Notes)',
     appProperties: {
       chronoTempoApp: 'true',
       backupVersion: '1',
@@ -199,7 +199,7 @@ export async function downloadDriveBackup(
     !Array.isArray(parsed.data.alarms) ||
     !Array.isArray(parsed.data.notes)
   ) {
-    throw new Error('Selected file is not a valid Chrono Tempo backup.');
+    throw new Error('Selected file is not a valid Kairo backup.');
   }
   return parsed as ChronoBackupPayload;
 }

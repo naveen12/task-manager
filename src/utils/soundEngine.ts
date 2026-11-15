@@ -1,4 +1,5 @@
 import type { AlarmTone } from '../types/chrono';
+import { getCustomRingtoneBlobUrl } from './ringtoneStore';
 
 export type AmbientSoundscape = 'off' | 'brown' | 'rain' | 'binaural';
 
@@ -7,6 +8,9 @@ class ChronoSoundEngine {
   private ambientNodes: AudioNode[] = [];
   private ambientGain: GainNode | null = null;
   private alarmInterval: number | null = null;
+  private activeAudioEl: HTMLAudioElement | null = null;
+  private activeObjectUrl: string | null = null;
+  private previewTimeout: number | null = null;
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -20,6 +24,26 @@ class ChronoSoundEngine {
       void this.ctx.resume();
     }
     return this.ctx;
+  }
+
+  private stopCustomAudio(): void {
+    if (this.previewTimeout !== null) {
+      window.clearTimeout(this.previewTimeout);
+      this.previewTimeout = null;
+    }
+    if (this.activeAudioEl) {
+      try {
+        this.activeAudioEl.pause();
+        this.activeAudioEl.currentTime = 0;
+      } catch {
+        // Ignore media stop error
+      }
+      this.activeAudioEl = null;
+    }
+    if (this.activeObjectUrl) {
+      URL.revokeObjectURL(this.activeObjectUrl);
+      this.activeObjectUrl = null;
+    }
   }
 
   public playTick(pitch = 880, volume = 0.03): void {
@@ -58,12 +82,12 @@ class ChronoSoundEngine {
     });
   }
 
-  public playAlarmToneOnce(tone: AlarmTone): void {
+  private playSynthTone(tone: Exclude<AlarmTone, 'custom'>): void {
     const ctx = this.getContext();
     if (!ctx) return;
     const now = ctx.currentTime;
 
-    const patterns: Record<AlarmTone, number[]> = {
+    const patterns: Record<Exclude<AlarmTone, 'custom'>, number[]> = {
       dawn: [440, 554.37, 659.25, 880],
       amber: [587.33, 739.99, 880],
       zenith: [523.25, 783.99, 1046.5],
@@ -87,11 +111,70 @@ class ChronoSoundEngine {
     });
   }
 
-  public startAlarmLoop(tone: AlarmTone): void {
+  public async playCustomRingtone(
+    ringtoneId: string,
+    loop: boolean,
+    onEnded?: () => void
+  ): Promise<boolean> {
+    this.stopCustomAudio();
+    const url = await getCustomRingtoneBlobUrl(ringtoneId);
+    if (!url) return false;
+
+    const audio = new Audio(url);
+    audio.loop = loop;
+    audio.onended = () => {
+      if (!loop) {
+        this.stopCustomAudio();
+        onEnded?.();
+      }
+    };
+    this.activeAudioEl = audio;
+    this.activeObjectUrl = url;
+
+    try {
+      await audio.play();
+      if (!loop) {
+        this.previewTimeout = window.setTimeout(() => {
+          this.stopCustomAudio();
+          onEnded?.();
+        }, 6000);
+      }
+      return true;
+    } catch {
+      this.stopCustomAudio();
+      return false;
+    }
+  }
+
+  public playAlarmToneOnce(tone: AlarmTone, customRingtoneId?: string): void {
+    this.stopCustomAudio();
+    if (tone === 'custom' && customRingtoneId) {
+      void this.playCustomRingtone(customRingtoneId, false).then((ok) => {
+        if (!ok) this.playSynthTone('dawn');
+      });
+      return;
+    }
+    this.playSynthTone(tone === 'custom' ? 'dawn' : tone);
+  }
+
+  public startAlarmLoop(tone: AlarmTone, customRingtoneId?: string): void {
     this.stopAlarmLoop();
-    this.playAlarmToneOnce(tone);
+    if (tone === 'custom' && customRingtoneId) {
+      void this.playCustomRingtone(customRingtoneId, true).then((ok) => {
+        if (!ok) {
+          this.playSynthTone('dawn');
+          this.alarmInterval = window.setInterval(() => {
+            this.playSynthTone('dawn');
+          }, 1500);
+        }
+      });
+      return;
+    }
+
+    const synthTone = tone === 'custom' ? 'dawn' : tone;
+    this.playSynthTone(synthTone);
     this.alarmInterval = window.setInterval(() => {
-      this.playAlarmToneOnce(tone);
+      this.playSynthTone(synthTone);
     }, 1500);
   }
 
@@ -100,6 +183,7 @@ class ChronoSoundEngine {
       window.clearInterval(this.alarmInterval);
       this.alarmInterval = null;
     }
+    this.stopCustomAudio();
   }
 
   public setAmbient(mode: AmbientSoundscape): void {
