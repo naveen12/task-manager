@@ -14,6 +14,10 @@ import {
 import { BackupSection } from './BackupSection';
 import type { ChronoBackupPayload } from '../utils/googleDriveBackup';
 import type { NotificationPermissionState } from '../utils/notificationEngine';
+import type {
+  AndroidAlertPermissionsStatus,
+  AndroidPermissionAction,
+} from '../utils/nativeAndroidBridge';
 import { soundEngine } from '../utils/soundEngine';
 
 interface SettingsSectionProps {
@@ -30,6 +34,8 @@ interface SettingsSectionProps {
   notificationPermission: NotificationPermissionState;
   onRequestNotificationPermission: () => void;
   onTestAlertPopup: () => void;
+  androidPermissions?: AndroidAlertPermissionsStatus;
+  onTriggerAndroidPermission?: (kind: AndroidPermissionAction) => void;
 }
 
 const FONT_OPTIONS: {
@@ -91,6 +97,8 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   notificationPermission,
   onRequestNotificationPermission,
   onTestAlertPopup,
+  androidPermissions,
+  onTriggerAndroidPermission,
 }) => {
   const setTheme = (theme: ThemeMode) => {
     soundEngine.playTick(840, 0.02);
@@ -238,6 +246,75 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
             </button>
           </div>
         </div>
+
+        {androidPermissions?.isNativeAndroid && onTriggerAndroidPermission && (
+          <div className="mt-5 pt-5 border-t border-slate-200 dark:border-white/[0.06] flex flex-col gap-2.5">
+            <p className="text-xs font-semibold text-slate-800 dark:text-[#F8FAFC]">
+              Android Lock-Screen &amp; Background Alert Permissions
+            </p>
+            <p className="text-xs text-slate-500 dark:text-[#94A3B8] mb-1">
+              Enable all permissions below so Tasks, Reminders, and Alarms wake your locked screen and show Heads-Up + Full-Screen popups via Foreground Service.
+            </p>
+            {(
+              [
+                {
+                  key: 'notifications' as AndroidPermissionAction,
+                  title: 'Heads-Up, Lock-Screen & High-Priority Notifications',
+                  granted: androidPermissions.postNotifications,
+                },
+                {
+                  key: 'fullScreen' as AndroidPermissionAction,
+                  title: 'Full-Screen Intent (Show Alert Over Lock Screen)',
+                  granted: androidPermissions.fullScreenIntent,
+                },
+                {
+                  key: 'overlay' as AndroidPermissionAction,
+                  title: 'Overlay / Draw Over Other Apps',
+                  granted: androidPermissions.overlayPermission,
+                },
+                {
+                  key: 'exactAlarm' as AndroidPermissionAction,
+                  title: 'Exact Alarm & Reminder Timing',
+                  granted: androidPermissions.exactAlarms,
+                },
+                {
+                  key: 'battery' as AndroidPermissionAction,
+                  title: 'Unrestricted Background / Battery Optimization Off',
+                  granted: androidPermissions.batteryOptimizationIgnored,
+                },
+              ] as const
+            ).map((perm) => (
+              <div
+                key={perm.key}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 dark:bg-[#12141F] border border-slate-200 dark:border-white/[0.06] px-3.5 py-2.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-slate-900 dark:text-[#F8FAFC]">
+                    {perm.title}
+                  </p>
+                  <p
+                    className={`text-[11px] font-medium ${
+                      perm.granted
+                        ? 'text-emerald-600 dark:text-[#34D399]'
+                        : 'text-amber-600 dark:text-[#F59E0B]'
+                    }`}
+                  >
+                    {perm.granted ? 'Granted' : 'Permission required'}
+                  </p>
+                </div>
+                {!perm.granted && (
+                  <button
+                    type="button"
+                    onClick={() => onTriggerAndroidPermission(perm.key)}
+                    className="min-h-[36px] rounded-full bg-indigo-600 px-3.5 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
+                  >
+                    Enable
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Font Size Card */}

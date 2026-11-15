@@ -26,6 +26,13 @@ class ChronoSoundEngine {
     return this.ctx;
   }
 
+  public unlockAudio(): void {
+    const ctx = this.getContext();
+    if (ctx && ctx.state === 'suspended') {
+      void ctx.resume();
+    }
+  }
+
   private stopCustomAudio(): void {
     if (this.previewTimeout !== null) {
       window.clearTimeout(this.previewTimeout);

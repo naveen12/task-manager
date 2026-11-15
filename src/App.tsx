@@ -47,6 +47,15 @@ import {
   type ActiveAlert,
   type NotificationPermissionState,
 } from './utils/notificationEngine';
+import {
+  computeUpcomingNativeAlerts,
+  getAndroidAlertPermissions,
+  notifyNativeServiceAction,
+  syncNativeAndroidAlerts,
+  triggerAndroidPermissionSetting,
+  type AndroidAlertPermissionsStatus,
+  type AndroidPermissionAction,
+} from './utils/nativeAndroidBridge';
 import { initAuth } from './utils/googleAuth';
 import type { ChronoBackupPayload } from './utils/googleDriveBackup';
 
@@ -166,6 +175,15 @@ export default function App() {
   const [notificationPermission, setNotificationPermission] =
     useState<NotificationPermissionState>(() => getNotificationPermissionState());
   const [notifBannerDismissed, setNotifBannerDismissed] = useState<boolean>(false);
+  const [androidPermissions, setAndroidPermissions] =
+    useState<AndroidAlertPermissionsStatus>({
+      isNativeAndroid: false,
+      postNotifications: false,
+      exactAlarms: false,
+      fullScreenIntent: false,
+      overlayPermission: false,
+      batteryOptimizationIgnored: false,
+    });
 
   const sessionStartMsRef = useRef<number>(Date.now());
   const firedKeysRef = useRef<Set<string>>(new Set());
@@ -282,6 +300,44 @@ export default function App() {
     });
   }, []);
 
+  // Sync upcoming Alarms, Reminders, Tasks, and Snoozes to Native Android AlarmManager
+  useEffect(() => {
+    const upcoming = computeUpcomingNativeAlerts(
+      alarms,
+      reminders,
+      tasks,
+      snoozedAlerts
+    );
+    void syncNativeAndroidAlerts(upcoming);
+  }, [alarms, reminders, tasks, snoozedAlerts]);
+
+  // Unlock Web Audio on first user interaction & refresh native Android permission status on resume
+  useEffect(() => {
+    const unlock = () => soundEngine.unlockAudio();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+
+    const refreshNativePerms = () => {
+      void getAndroidAlertPermissions().then(setAndroidPermissions);
+    };
+    refreshNativePerms();
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshNativePerms();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', refreshNativePerms);
+
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', refreshNativePerms);
+    };
+  }, []);
+
   // Real-time 1s clock + Task, Reminder, Alarm & Snooze trigger check (with lock/sleep catch-up)
   const evaluateDueAlerts = useCallback(() => {
     const current = new Date();
@@ -305,7 +361,7 @@ export default function App() {
       ).getTime();
       if (
         nowMs >= scheduled &&
-        nowMs - scheduled <= 15 * 60 * 1000 &&
+        nowMs - scheduled <= 60 * 60 * 1000 &&
         scheduled >= sessionStartMsRef.current - 60 * 1000
       ) {
         firedKeysRef.current.add(key);
@@ -527,6 +583,7 @@ export default function App() {
       const target = targetUid
         ? alertQueue.find((a) => a.uid === targetUid)
         : alertQueue[0];
+      void notifyNativeServiceAction('stop');
       if (target) {
         void closeSystemAlertNotification(target.uid);
         setAlertQueue((prev) => prev.filter((a) => a.uid !== target.uid));
@@ -545,6 +602,7 @@ export default function App() {
         : alertQueue[0];
       if (!target) return;
 
+      void notifyNativeServiceAction('snooze');
       void closeSystemAlertNotification(target.uid);
       const triggerAtMs = Date.now() + 5 * 60 * 1000;
       const snoozeDate = new Date(triggerAtMs);
@@ -607,6 +665,16 @@ export default function App() {
       },
     ]);
   }, [enqueueAlerts]);
+
+  const handleTriggerAndroidPermission = useCallback(
+    async (kind: AndroidPermissionAction) => {
+      soundEngine.playTick(860, 0.02);
+      await triggerAndroidPermissionSetting(kind);
+      const refreshed = await getAndroidAlertPermissions();
+      setAndroidPermissions(refreshed);
+    },
+    []
+  );
 
   // Note CRUD handlers
   const handleCreateNote = useCallback(
@@ -992,6 +1060,10 @@ export default function App() {
                 void handleRequestNotificationPermission();
               }}
               onTestAlertPopup={handleTestAlertPopup}
+              androidPermissions={androidPermissions}
+              onTriggerAndroidPermission={(kind) => {
+                void handleTriggerAndroidPermission(kind);
+              }}
             />
           )}
         </div>
