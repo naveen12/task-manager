@@ -1,6 +1,7 @@
 import React from 'react';
 import type { User } from 'firebase/auth';
-import { BellRing, CheckCircle2, Minus, Moon, Plus, RotateCcw, Sun, Type } from 'lucide-react';
+import { BellRing, CheckCircle2, Minus, Moon, Plus, RotateCcw, Sun, Type, Volume2 } from 'lucide-react';
+import { GlowingToggle } from './GlowingToggle';
 import {
   DEFAULT_SETTINGS,
   type AppFontFamily,
@@ -247,6 +248,30 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
           </div>
         </div>
 
+        {/* Gradual Volume Crescendo Toggle */}
+        <div className="mt-5 pt-4 border-t border-slate-200 dark:border-white/[0.06] flex items-center justify-between gap-4">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-50 dark:bg-[#6366F1]/15 text-indigo-600 dark:text-[#818CF8]">
+              <Volume2 className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                Gradual Ringtone Volume (Crescendo)
+              </p>
+              <p className="mt-0.5 text-xs text-slate-600 dark:text-[#94A3B8]">
+                Gently increases alarm and alert volume from soft to full over 15 seconds
+              </p>
+            </div>
+          </div>
+          <GlowingToggle
+            checked={settings.gradualAlarmVolume}
+            onChange={(next) =>
+              onUpdateSettings({ ...settings, gradualAlarmVolume: next })
+            }
+            ariaLabel="Toggle gradual ringtone volume"
+          />
+        </div>
+
         {androidPermissions?.isNativeAndroid && onTriggerAndroidPermission && (
           <div className="mt-5 pt-5 border-t border-slate-200 dark:border-white/[0.06] flex flex-col gap-2.5">
             <p className="text-xs font-semibold text-slate-800 dark:text-[#F8FAFC]">
@@ -261,26 +286,31 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
                   key: 'notifications' as AndroidPermissionAction,
                   title: 'Heads-Up, Lock-Screen & High-Priority Notifications',
                   granted: androidPermissions.postNotifications,
+                  hint: null,
                 },
                 {
                   key: 'fullScreen' as AndroidPermissionAction,
                   title: 'Full-Screen Intent (Show Alert Over Lock Screen)',
                   granted: androidPermissions.fullScreenIntent,
+                  hint: null,
                 },
                 {
                   key: 'overlay' as AndroidPermissionAction,
                   title: 'Overlay / Draw Over Other Apps',
                   granted: androidPermissions.overlayPermission,
+                  hint: 'Android 13+ APK note: If denied, tap "App Info" → tap ⋮ (top-right) → "Allow restricted settings", then tap Enable.',
                 },
                 {
                   key: 'exactAlarm' as AndroidPermissionAction,
                   title: 'Exact Alarm & Reminder Timing',
                   granted: androidPermissions.exactAlarms,
+                  hint: null,
                 },
                 {
                   key: 'battery' as AndroidPermissionAction,
                   title: 'Unrestricted Background / Battery Optimization Off',
                   granted: androidPermissions.batteryOptimizationIgnored,
+                  hint: null,
                 },
               ] as const
             ).map((perm) => (
@@ -301,15 +331,31 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
                   >
                     {perm.granted ? 'Granted' : 'Permission required'}
                   </p>
+                  {!perm.granted && perm.hint && (
+                    <p className="mt-1 text-[11px] leading-snug text-slate-500 dark:text-[#94A3B8]">
+                      {perm.hint}
+                    </p>
+                  )}
                 </div>
                 {!perm.granted && (
-                  <button
-                    type="button"
-                    onClick={() => onTriggerAndroidPermission(perm.key)}
-                    className="min-h-[36px] rounded-full bg-indigo-600 px-3.5 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
-                  >
-                    Enable
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {perm.key === 'overlay' && (
+                      <button
+                        type="button"
+                        onClick={() => onTriggerAndroidPermission('appInfo')}
+                        className="min-h-[36px] rounded-full bg-white dark:bg-white/[0.06] border border-slate-200 dark:border-white/10 px-3 text-xs font-medium text-slate-700 dark:text-[#F8FAFC] cursor-pointer whitespace-nowrap"
+                      >
+                        App Info
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onTriggerAndroidPermission(perm.key)}
+                      className="min-h-[36px] rounded-full bg-indigo-600 px-3.5 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
+                    >
+                      Enable
+                    </button>
+                  </div>
                 )}
               </div>
             ))}

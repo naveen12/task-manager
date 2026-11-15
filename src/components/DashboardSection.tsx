@@ -31,6 +31,7 @@ import {
 import { TactileCheckbox } from './TactileCheckbox';
 import { GlowingToggle } from './GlowingToggle';
 import { soundEngine } from '../utils/soundEngine';
+import { CopyButton } from './ClipboardButtons';
 
 export type QuickAddTarget = 'tasks' | 'reminders' | 'alarms' | 'notes';
 
@@ -298,6 +299,40 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <CopyButton
+            label="Copy Day"
+            ariaLabel={`Copy agenda summary for ${selectedDayMeta.fullLabel}`}
+            text={[
+              `Kairo — ${selectedDayMeta.fullLabel}`,
+              '',
+              `Tasks (${dayTasks.length}):`,
+              ...(dayTasks.length > 0
+                ? dayTasks.map(
+                    (t) => `- [${t.completed ? 'x' : ' '}] ${t.dueTime} ${t.title}`
+                  )
+                : ['- None']),
+              '',
+              `Reminders (${dayReminders.length}):`,
+              ...(dayReminders.length > 0
+                ? dayReminders.map(
+                    (r) => `- [${r.completed ? 'x' : ' '}] ${r.time} ${r.title}`
+                  )
+                : ['- None']),
+              '',
+              `Alarms (${activeAlarmsForDay.length} active):`,
+              ...(activeAlarmsForDay.length > 0
+                ? activeAlarmsForDay.map((a) => {
+                    const h12 = a.hour24 % 12 || 12;
+                    const p = a.hour24 >= 12 ? 'PM' : 'AM';
+                    return `- ${String(h12).padStart(2, '0')}:${String(a.minute).padStart(
+                      2,
+                      '0'
+                    )} ${p} ${a.label}`;
+                  })
+                : ['- None']),
+            ].join('\n')}
+            className="min-h-[44px] px-3.5 text-xs"
+          />
           {/* Calendar Show / Hide Toggle (default hidden) */}
           <button
             type="button"

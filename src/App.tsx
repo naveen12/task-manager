@@ -49,7 +49,10 @@ import {
 } from './utils/notificationEngine';
 import {
   computeUpcomingNativeAlerts,
+  fetchNativeHandledAlerts,
   getAndroidAlertPermissions,
+  isNativeAndroidPlatform,
+  markNativeSlotHandled,
   notifyNativeServiceAction,
   syncNativeAndroidAlerts,
   triggerAndroidPermissionSetting,
@@ -66,7 +69,45 @@ const STORAGE_KEYS = {
   notes: 'chrono_tempo_notes_v2',
   settings: 'chrono_tempo_settings_v1',
   snoozed: 'kairo_snoozed_alerts_v1',
+  firedKeys: 'kairo_fired_keys_v1',
 };
+
+function loadRecentFiredKeys(): Set<string> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.firedKeys);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as Record<string, number>;
+    const cutoff = Date.now() - 36 * 60 * 60 * 1000;
+    const set = new Set<string>();
+    Object.entries(parsed).forEach(([k, ts]) => {
+      if (typeof ts === 'number' && ts >= cutoff) {
+        set.add(k);
+      }
+    });
+    return set;
+  } catch {
+    return new Set();
+  }
+}
+
+function persistFiredKeys(keys: Set<string>): void {
+  try {
+    const now = Date.now();
+    const existingRaw = localStorage.getItem(STORAGE_KEYS.firedKeys);
+    const existing = existingRaw ? (JSON.parse(existingRaw) as Record<string, number>) : {};
+    const cutoff = now - 36 * 60 * 60 * 1000;
+    const cleaned: Record<string, number> = {};
+    Object.entries(existing).forEach(([k, ts]) => {
+      if (typeof ts === 'number' && ts >= cutoff) cleaned[k] = ts;
+    });
+    keys.forEach((k) => {
+      if (!cleaned[k]) cleaned[k] = now;
+    });
+    localStorage.setItem(STORAGE_KEYS.firedKeys, JSON.stringify(cleaned));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 interface SnoozedAlertEntry {
   alert: ActiveAlert;
@@ -186,7 +227,8 @@ export default function App() {
     });
 
   const sessionStartMsRef = useRef<number>(Date.now());
-  const firedKeysRef = useRef<Set<string>>(new Set());
+  const firedKeysRef = useRef<Set<string>>(loadRecentFiredKeys());
+  const nativeSyncedOnceRef = useRef<boolean>(!isNativeAndroidPlatform());
 
   // Google Account auth state (token cached strictly in memory)
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -283,12 +325,22 @@ export default function App() {
       stopAlertVibration();
       return;
     }
-    soundEngine.startAlarmLoop(activeAlert.tone, activeAlert.customRingtoneId);
+    soundEngine.startAlarmLoop(
+      activeAlert.tone,
+      activeAlert.customRingtoneId,
+      settings.gradualAlarmVolume
+    );
     startAlertVibration();
-  }, [activeAlert?.uid]);
+  }, [activeAlert?.uid, settings.gradualAlarmVolume]);
 
   const enqueueAlerts = useCallback((incoming: ActiveAlert[]) => {
     if (incoming.length === 0) return;
+    incoming.forEach((a) => {
+      firedKeysRef.current.add(a.uid);
+      void markNativeSlotHandled(a.uid);
+    });
+    persistFiredKeys(firedKeysRef.current);
+
     setAlertQueue((prev) => {
       const existingUids = new Set(prev.map((a) => a.uid));
       const fresh = incoming.filter((a) => !existingUids.has(a.uid));
@@ -300,6 +352,70 @@ export default function App() {
     });
   }, []);
 
+  // Sync handled alerts from Native Android so alerts stopped/snoozed on lock screen never ring again in WebView
+  const syncHandledFromNative = useCallback(async () => {
+    if (!isNativeAndroidPlatform()) {
+      nativeSyncedOnceRef.current = true;
+      return {
+        isAlertActive: false,
+        activeSlotKey: '',
+        handledSlotKeys: new Set<string>(),
+      };
+    }
+    const { handled, isAlertActive, activeSlotKey } = await fetchNativeHandledAlerts();
+    let changed = false;
+    const nowMs = Date.now();
+    const nativeSnoozes: SnoozedAlertEntry[] = [];
+
+    for (const item of handled) {
+      if (item.slotKey && !firedKeysRef.current.has(item.slotKey)) {
+        firedKeysRef.current.add(item.slotKey);
+        changed = true;
+      }
+      if (item.action === 'snoozed' && item.snoozeUntilMs > nowMs + 1000) {
+        const snoozeDate = new Date(item.snoozeUntilMs);
+        const typeSafe =
+          item.type === 'reminder' || item.type === 'task' ? item.type : 'alarm';
+        nativeSnoozes.push({
+          alert: {
+            uid: `${item.id}-snooze-${item.snoozeUntilMs}`,
+            sourceId: item.id,
+            type: typeSafe,
+            name: item.name,
+            timeLabel: format12HourTime(
+              snoozeDate.getHours(),
+              snoozeDate.getMinutes()
+            ),
+            tone: 'dawn',
+          },
+          triggerAtMs: item.snoozeUntilMs,
+        });
+      }
+    }
+
+    if (changed) {
+      persistFiredKeys(firedKeysRef.current);
+      const handledSlots = new Set(handled.map((h) => h.slotKey));
+      setAlertQueue((prev) => prev.filter((a) => !handledSlots.has(a.uid)));
+    }
+
+    if (nativeSnoozes.length > 0) {
+      setSnoozedAlerts((prev) => {
+        const existingKeys = new Set(
+          prev.map((s) => `${s.alert.sourceId}-${s.triggerAtMs}`)
+        );
+        const toAdd = nativeSnoozes.filter(
+          (ns) => !existingKeys.has(`${ns.alert.sourceId}-${ns.triggerAtMs}`)
+        );
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+      });
+    }
+
+    nativeSyncedOnceRef.current = true;
+    const handledSlotKeys = new Set(handled.map((h) => h.slotKey).filter(Boolean));
+    return { isAlertActive, activeSlotKey, handledSlotKeys };
+  }, []);
+
   // Sync upcoming Alarms, Reminders, Tasks, and Snoozes to Native Android AlarmManager
   useEffect(() => {
     const upcoming = computeUpcomingNativeAlerts(
@@ -308,8 +424,8 @@ export default function App() {
       tasks,
       snoozedAlerts
     );
-    void syncNativeAndroidAlerts(upcoming);
-  }, [alarms, reminders, tasks, snoozedAlerts]);
+    void syncNativeAndroidAlerts(upcoming, settings.gradualAlarmVolume);
+  }, [alarms, reminders, tasks, snoozedAlerts, settings.gradualAlarmVolume]);
 
   // Unlock Web Audio on first user interaction & refresh native Android permission status on resume
   useEffect(() => {
@@ -319,6 +435,7 @@ export default function App() {
 
     const refreshNativePerms = () => {
       void getAndroidAlertPermissions().then(setAndroidPermissions);
+      void syncHandledFromNative();
     };
     refreshNativePerms();
 
@@ -336,17 +453,24 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', refreshNativePerms);
     };
-  }, []);
+  }, [syncHandledFromNative]);
 
-  // Real-time 1s clock + Task, Reminder, Alarm & Snooze trigger check (with lock/sleep catch-up)
+  // Real-time 1s clock + Task, Reminder, Alarm & Snooze trigger check (with native Android dedup)
   const evaluateDueAlerts = useCallback(() => {
     const current = new Date();
     const nowMs = current.getTime();
     setNow(current);
 
+    if (isNativeAndroidPlatform() && !nativeSyncedOnceRef.current) {
+      return;
+    }
+
     const todayStr = formatDateToYMD(current);
     const currentDay = current.getDay();
     const dueAlerts: ActiveAlert[] = [];
+    // On Native Android, AlarmManager handles background/lock-screen triggers reliably.
+    // Keep WebView catch-up narrow (10s) on Android so reopening the app never re-rings a past lock-screen alarm.
+    const catchupWindowMs = isNativeAndroidPlatform() ? 10 * 1000 : 60 * 60 * 1000;
 
     const isDueInWindow = (hour24: number, minute: number, key: string): boolean => {
       if (firedKeysRef.current.has(key)) return false;
@@ -361,10 +485,11 @@ export default function App() {
       ).getTime();
       if (
         nowMs >= scheduled &&
-        nowMs - scheduled <= 60 * 60 * 1000 &&
+        nowMs - scheduled <= catchupWindowMs &&
         scheduled >= sessionStartMsRef.current - 60 * 1000
       ) {
         firedKeysRef.current.add(key);
+        persistFiredKeys(firedKeysRef.current);
         return true;
       }
       return false;
@@ -426,29 +551,53 @@ export default function App() {
     });
 
     // 4. Snoozed Alerts (for Alarms, Reminders, and Tasks)
-    const dueSnoozes = snoozedAlerts.filter((entry) => nowMs >= entry.triggerAtMs);
+    const dueSnoozes = snoozedAlerts.filter(
+      (entry) =>
+        nowMs >= entry.triggerAtMs &&
+        nowMs - entry.triggerAtMs <= catchupWindowMs
+    );
     if (dueSnoozes.length > 0) {
       setSnoozedAlerts((prev) => prev.filter((entry) => nowMs < entry.triggerAtMs));
       dueSnoozes.forEach((entry) => {
+        const snoozeUid = `${entry.alert.sourceId}-snooze-${entry.triggerAtMs}`;
+        if (firedKeysRef.current.has(snoozeUid)) return;
+        firedKeysRef.current.add(snoozeUid);
+        persistFiredKeys(firedKeysRef.current);
         const d = new Date(entry.triggerAtMs);
         dueAlerts.push({
           ...entry.alert,
-          uid: `${entry.alert.sourceId}-snooze-${entry.triggerAtMs}`,
+          uid: snoozeUid,
           timeLabel: format12HourTime(d.getHours(), d.getMinutes()),
         });
       });
     }
 
     if (dueAlerts.length > 0) {
-      enqueueAlerts(dueAlerts);
+      if (isNativeAndroidPlatform()) {
+        void syncHandledFromNative().then(
+          ({ isAlertActive, activeSlotKey, handledSlotKeys }) => {
+            if (isAlertActive) return;
+            const safeDue = dueAlerts.filter(
+              (a) => !handledSlotKeys.has(a.uid) && activeSlotKey !== a.uid
+            );
+            if (safeDue.length > 0) {
+              enqueueAlerts(safeDue);
+            }
+          }
+        );
+      } else {
+        enqueueAlerts(dueAlerts);
+      }
     }
-  }, [alarms, reminders, tasks, snoozedAlerts, enqueueAlerts]);
+  }, [alarms, reminders, tasks, snoozedAlerts, enqueueAlerts, syncHandledFromNative]);
 
   useEffect(() => {
     const id = window.setInterval(evaluateDueAlerts, 1000);
     const onWake = () => {
       if (document.visibilityState === 'visible') {
-        evaluateDueAlerts();
+        void syncHandledFromNative().then(() => {
+          evaluateDueAlerts();
+        });
       }
     };
     document.addEventListener('visibilitychange', onWake);
@@ -458,7 +607,7 @@ export default function App() {
       document.removeEventListener('visibilitychange', onWake);
       window.removeEventListener('focus', onWake);
     };
-  }, [evaluateDueAlerts]);
+  }, [evaluateDueAlerts, syncHandledFromNative]);
 
   // Quick Add handler from Dashboard '+' button
   const handleQuickAdd = useCallback(

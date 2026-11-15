@@ -37,6 +37,8 @@ import {
   type DriveBackupFile,
 } from '../utils/googleDriveBackup';
 import { soundEngine } from '../utils/soundEngine';
+import { CopyButton, PasteButton } from './ClipboardButtons';
+import { readTextFromClipboard } from '../utils/clipboard';
 
 interface BackupSectionProps {
   user: User | null;
@@ -285,6 +287,38 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
     }
   };
 
+  const handlePasteJsonRestore = async () => {
+    setErrorMessage(null);
+    setStatusMessage(null);
+    const text = await readTextFromClipboard();
+    if (!text) {
+      setErrorMessage('Clipboard is empty or blocked. Copy a Kairo JSON backup first, or use Import JSON.');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text) as Partial<ChronoBackupPayload>;
+      if (
+        !parsed ||
+        !parsed.data ||
+        !Array.isArray(parsed.data.tasks) ||
+        !Array.isArray(parsed.data.reminders) ||
+        !Array.isArray(parsed.data.alarms) ||
+        !Array.isArray(parsed.data.notes)
+      ) {
+        throw new Error('Clipboard text is not a valid Kairo backup JSON.');
+      }
+      setConfirmAction({
+        type: 'restoreLocal',
+        payload: parsed as ChronoBackupPayload,
+        fileName: 'Clipboard JSON',
+      });
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error ? err.message : 'Clipboard does not contain valid JSON.'
+      );
+    }
+  };
+
   return (
     <section className="flex flex-col gap-6">
       <div>
@@ -424,12 +458,23 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
               className="flex flex-col sm:flex-row sm:items-end gap-3"
             >
               <div className="flex-1">
-                <label
-                  htmlFor="backup-filename-input"
-                  className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-                >
-                  Backup Filename (Google Drive)
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label
+                    htmlFor="backup-filename-input"
+                    className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+                  >
+                    Backup Filename (Google Drive)
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    {backupName && (
+                      <CopyButton text={backupName} ariaLabel="Copy backup filename" />
+                    )}
+                    <PasteButton
+                      targetInputId="backup-filename-input"
+                      onPasteText={(val) => setBackupName(val)}
+                    />
+                  </div>
+                </div>
                 <input
                   id="backup-filename-input"
                   type="text"
@@ -542,7 +587,26 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <CopyButton
+            label="Copy JSON"
+            ariaLabel="Copy entire Kairo backup as JSON"
+            text={JSON.stringify(
+              buildBackupPayload({ tasks, reminders, alarms, notes }),
+              null,
+              2
+            )}
+            className="h-11 px-4 text-xs"
+          />
+
+          <button
+            type="button"
+            onClick={() => void handlePasteJsonRestore()}
+            className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
+          >
+            Paste JSON
+          </button>
+
           <button
             type="button"
             onClick={handleLocalExport}

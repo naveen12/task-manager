@@ -9,10 +9,14 @@ import androidx.core.content.ContextCompat;
 public class ExactAlarmReceiver extends BroadcastReceiver {
   @Override
   public void onReceive(Context context, Intent intent) {
+    String slotKey = intent.getStringExtra("slot_key");
+    if (AlarmScheduler.isSlotMarkedHandled(context, slotKey)) {
+      return;
+    }
+
     PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
-    PowerManager.WakeLock wakeLock = null;
     if (pm != null) {
-      wakeLock = pm.newWakeLock(
+      PowerManager.WakeLock wakeLock = pm.newWakeLock(
         PowerManager.PARTIAL_WAKE_LOCK,
         "Kairo::ExactAlarmWakeLock"
       );
@@ -22,6 +26,7 @@ public class ExactAlarmReceiver extends BroadcastReceiver {
     Intent serviceIntent = new Intent(context, AlarmForegroundService.class);
     serviceIntent.setAction(AlarmForegroundService.ACTION_START);
     serviceIntent.putExtra("alert_id", intent.getStringExtra("alert_id"));
+    serviceIntent.putExtra("slot_key", slotKey);
     serviceIntent.putExtra("alert_type", intent.getStringExtra("alert_type"));
     serviceIntent.putExtra("alert_name", intent.getStringExtra("alert_name"));
     serviceIntent.putExtra("alert_time", intent.getStringExtra("alert_time"));

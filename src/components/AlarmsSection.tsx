@@ -21,6 +21,7 @@ import {
   saveCustomRingtone,
   type SavedRingtoneMeta,
 } from '../utils/ringtoneStore';
+import { CopyButton, PasteButton } from './ClipboardButtons';
 
 interface AlarmsSectionProps {
   alarms: ChronoAlarm[];
@@ -284,12 +285,21 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
           />
 
           <div>
-            <label
-              htmlFor="alarm-label-input"
-              className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-            >
-              Alarm Label
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label
+                htmlFor="alarm-label-input"
+                className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+              >
+                Alarm Label
+              </label>
+              <div className="flex items-center gap-1.5">
+                {label && <CopyButton text={label} ariaLabel="Copy alarm label" />}
+                <PasteButton
+                  targetInputId="alarm-label-input"
+                  onPasteText={(val) => setLabel(val)}
+                />
+              </div>
+            </div>
             <input
               id="alarm-label-input"
               type="text"
@@ -516,15 +526,20 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
                     </span>
                   </div>
 
-                  <p className="mt-1 truncate text-sm font-medium text-slate-900 dark:text-[#F8FAFC]">
+                  <p className="mt-1 truncate text-sm font-medium text-slate-900 dark:text-[#F8FAFC] select-text">
                     {alarm.label}
                   </p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#94A3B8]">
+                  <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#94A3B8] select-text">
                     {formatDaysSummary(alarm.days)} · {toneLabel}
                   </p>
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
+                  <CopyButton
+                    compact
+                    text={`${timeStr} ${period} — ${alarm.label} (${formatDaysSummary(alarm.days)})`}
+                    ariaLabel={`Copy alarm ${alarm.label}`}
+                  />
                   <button
                     type="button"
                     onClick={() => onTriggerTestRing(alarm)}

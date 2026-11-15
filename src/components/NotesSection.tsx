@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Pencil, Pin, Plus, Search, Trash2, X } from 'lucide-react';
 import type { NoteCategory, NoteItem } from '../types/chrono';
 import { soundEngine } from '../utils/soundEngine';
+import { CopyButton, PasteButton } from './ClipboardButtons';
 
 interface NotesSectionProps {
   notes: NoteItem[];
@@ -191,12 +192,21 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2">
-              <label
-                htmlFor="note-title-input"
-                className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-              >
-                Title
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <label
+                  htmlFor="note-title-input"
+                  className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+                >
+                  Title
+                </label>
+                <div className="flex items-center gap-1.5">
+                  {title && <CopyButton text={title} ariaLabel="Copy note title" />}
+                  <PasteButton
+                    targetInputId="note-title-input"
+                    onPasteText={(val) => setTitle((prev) => (prev ? `${prev} ${val}` : val))}
+                  />
+                </div>
+              </div>
               <input
                 id="note-title-input"
                 type="text"
@@ -231,12 +241,23 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
           </div>
 
           <div>
-            <label
-              htmlFor="note-content-input"
-              className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-            >
-              Content
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label
+                htmlFor="note-content-input"
+                className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+              >
+                Content
+              </label>
+              <div className="flex items-center gap-1.5">
+                {content && <CopyButton text={content} ariaLabel="Copy note content" />}
+                <PasteButton
+                  targetInputId="note-content-input"
+                  onPasteText={(val) =>
+                    setContent((prev) => (prev ? `${prev}\n${val}` : val))
+                  }
+                />
+              </div>
+            </div>
             <textarea
               id="note-content-input"
               rows={5}
@@ -307,6 +328,11 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
                     {note.category} · {formatUpdated(note.updatedAt)}
                   </span>
                   <div className="flex items-center gap-0.5">
+                    <CopyButton
+                      compact
+                      text={`${note.title}${note.content ? `\n\n${note.content}` : ''}`}
+                      ariaLabel={`Copy note ${note.title}`}
+                    />
                     <button
                       type="button"
                       onClick={() => onTogglePin(note.id)}
@@ -338,10 +364,10 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
                   </div>
                 </div>
 
-                <h3 className="mt-2 text-base font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                <h3 className="mt-2 text-base font-semibold text-slate-900 dark:text-[#F8FAFC] select-text">
                   {note.title}
                 </h3>
-                <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-600 dark:text-[#94A3B8] line-clamp-4">
+                <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-600 dark:text-[#94A3B8] line-clamp-4 select-text">
                   {note.content}
                 </p>
               </div>

@@ -183,12 +183,44 @@ function patchManifest() {
   console.log(`+ Updated ${path.relative(rootDir, manifestPath)}`);
 }
 
+function ensureLocalProperties() {
+  const localPropsPath = path.join(androidDir, 'local.properties');
+  if (fs.existsSync(localPropsPath)) {
+    const existing = fs.readFileSync(localPropsPath, 'utf8');
+    if (/^\s*sdk\.dir\s*=/m.test(existing)) {
+      return;
+    }
+  }
+
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const localAppData = process.env.LOCALAPPDATA || (home ? path.join(home, 'AppData', 'Local') : '');
+  const candidates = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    localAppData ? path.join(localAppData, 'Android', 'Sdk') : null,
+    home ? path.join(home, 'Android', 'Sdk') : null,
+    home ? path.join(home, 'Library', 'Android', 'sdk') : null,
+  ].filter(Boolean);
+
+  const foundSdk = candidates.find((p) => fs.existsSync(p));
+  if (foundSdk) {
+    const escaped = foundSdk.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
+    fs.writeFileSync(localPropsPath, `sdk.dir=${escaped}\n`, 'utf8');
+    console.log(`+ Created android/local.properties (sdk.dir=${foundSdk})`);
+  } else {
+    console.log(
+      '! Android SDK not auto-detected. Set ANDROID_HOME or create android/local.properties with sdk.dir=...'
+    );
+  }
+}
+
 if (!fs.existsSync(androidDir)) {
-  fail('android/ folder not found. Run "npx cap add android" first, then re-run "npm run android:setup".');
+  fail('android/ folder not found. Run "npx cap add android" first, then re-run "node scripts/apply-android-native.mjs".');
 }
 
 const packageName = detectPackageName();
 console.log(`[Kairo Android Setup] Detected Android package: ${packageName}`);
 copyJavaTemplates(packageName);
 patchManifest();
+ensureLocalProperties();
 console.log('[Kairo Android Setup] Native lock-screen alarm, notification & permission support applied successfully.');

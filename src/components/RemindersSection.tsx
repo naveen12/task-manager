@@ -9,6 +9,7 @@ import {
 import { GlowingToggle } from './GlowingToggle';
 import { TactileCheckbox } from './TactileCheckbox';
 import { soundEngine } from '../utils/soundEngine';
+import { CopyButton, PasteButton } from './ClipboardButtons';
 
 interface RemindersSectionProps {
   reminders: ReminderItem[];
@@ -225,12 +226,21 @@ export const RemindersSection: React.FC<RemindersSectionProps> = ({
           </div>
 
           <div>
-            <label
-              htmlFor="rem-title-input"
-              className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-            >
-              Reminder Title
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label
+                htmlFor="rem-title-input"
+                className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+              >
+                Reminder Title
+              </label>
+              <div className="flex items-center gap-1.5">
+                {title && <CopyButton text={title} ariaLabel="Copy reminder title" />}
+                <PasteButton
+                  targetInputId="rem-title-input"
+                  onPasteText={(val) => setTitle((prev) => (prev ? `${prev} ${val}` : val))}
+                />
+              </div>
+            </div>
             <input
               id="rem-title-input"
               type="text"
@@ -324,12 +334,21 @@ export const RemindersSection: React.FC<RemindersSectionProps> = ({
           </div>
 
           <div>
-            <label
-              htmlFor="rem-note-input"
-              className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-            >
-              Note (optional)
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label
+                htmlFor="rem-note-input"
+                className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+              >
+                Note (optional)
+              </label>
+              <div className="flex items-center gap-1.5">
+                {note && <CopyButton text={note} ariaLabel="Copy reminder note" />}
+                <PasteButton
+                  targetInputId="rem-note-input"
+                  onPasteText={(val) => setNote((prev) => (prev ? `${prev} ${val}` : val))}
+                />
+              </div>
+            </div>
             <input
               id="rem-note-input"
               type="text"
@@ -402,7 +421,7 @@ export const RemindersSection: React.FC<RemindersSectionProps> = ({
                   </div>
 
                   <p
-                    className={`mt-0.5 truncate text-[15px] font-medium ${
+                    className={`mt-0.5 truncate text-[15px] font-medium select-text ${
                       item.completed
                         ? 'line-through text-slate-400 dark:text-[#64748B]'
                         : 'text-slate-900 dark:text-[#F8FAFC]'
@@ -412,13 +431,20 @@ export const RemindersSection: React.FC<RemindersSectionProps> = ({
                   </p>
 
                   {item.note && !item.completed && (
-                    <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B]">
+                    <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B] select-text">
                       {item.note}
                     </p>
                   )}
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
+                  <CopyButton
+                    compact
+                    text={`${item.title} (${item.date} ${item.time}, ${item.repeat})${
+                      item.note ? ` — ${item.note}` : ''
+                    }`}
+                    ariaLabel={`Copy reminder ${item.title}`}
+                  />
                   <GlowingToggle
                     checked={item.active}
                     onChange={(next) => onToggleActive(item.id, next)}

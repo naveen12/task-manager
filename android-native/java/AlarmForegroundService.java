@@ -12,7 +12,9 @@ import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import androidx.core.app.NotificationCompat;
@@ -28,11 +30,18 @@ public class AlarmForegroundService extends Service {
 
   private static final String CHANNEL_ID = "kairo_urgent_alerts_v2";
   private static final int NOTIFICATION_ID = 42001;
+  private static final long CRESCENDO_DURATION_MS = 15000L;
+
+  public static volatile boolean isAlertActive = false;
+  public static volatile String activeSlotKey = "";
 
   private MediaPlayer mediaPlayer;
   private Vibrator vibrator;
+  private final Handler volumeHandler = new Handler(Looper.getMainLooper());
+  private Runnable volumeRunnable;
 
   private String currentId = "alert";
+  private String currentSlotKey = "";
   private String currentType = "alarm";
   private String currentName = "Kairo Alert";
   private String currentTime = "";
@@ -51,25 +60,61 @@ public class AlarmForegroundService extends Service {
 
     String action = intent.getAction();
     if (ACTION_STOP.equals(action)) {
+      AlarmScheduler.recordHandledAlert(
+        this,
+        currentSlotKey,
+        currentId,
+        currentType,
+        currentName,
+        currentTime,
+        "stopped",
+        0L
+      );
       stopAlertAndSelf();
       return START_NOT_STICKY;
     }
 
     if (ACTION_SNOOZE.equals(action)) {
-      scheduleSnooze5Min();
+      long snoozeAtMs = scheduleSnooze5Min();
+      AlarmScheduler.recordHandledAlert(
+        this,
+        currentSlotKey,
+        currentId,
+        currentType,
+        currentName,
+        currentTime,
+        "snoozed",
+        snoozeAtMs
+      );
       stopAlertAndSelf();
       return START_NOT_STICKY;
     }
 
     String id = intent.getStringExtra("alert_id");
+    String slotKey = intent.getStringExtra("slot_key");
     String type = intent.getStringExtra("alert_type");
     String name = intent.getStringExtra("alert_name");
     String time = intent.getStringExtra("alert_time");
 
     if (id != null && !id.isEmpty()) currentId = id;
+    currentSlotKey = (slotKey != null && !slotKey.isEmpty()) ? slotKey : currentId;
     if (type != null && !type.isEmpty()) currentType = type;
     if (name != null && !name.isEmpty()) currentName = name;
     if (time != null) currentTime = time;
+
+    isAlertActive = true;
+    activeSlotKey = currentSlotKey;
+
+    AlarmScheduler.recordHandledAlert(
+      this,
+      currentSlotKey,
+      currentId,
+      currentType,
+      currentName,
+      currentTime,
+      "fired",
+      0L
+    );
 
     ensureNotificationChannel();
     Notification notification = buildUrgentNotification();
@@ -191,6 +236,8 @@ public class AlarmForegroundService extends Service {
       }
       if (toneUri == null) return;
 
+      boolean gradual = AlarmScheduler.isGradualVolumeEnabled(this);
+
       mediaPlayer = new MediaPlayer();
       mediaPlayer.setDataSource(this, toneUri);
       mediaPlayer.setAudioAttributes(
@@ -201,11 +248,40 @@ public class AlarmForegroundService extends Service {
       );
       mediaPlayer.setLooping(true);
       mediaPlayer.prepare();
+
+      if (gradual) {
+        mediaPlayer.setVolume(0.08f, 0.08f);
+        final long startMs = System.currentTimeMillis();
+        volumeRunnable = new Runnable() {
+          @Override
+          public void run() {
+            if (mediaPlayer == null) return;
+            long elapsed = Math.max(0L, System.currentTimeMillis() - startMs);
+            float t = Math.min(1f, (float) elapsed / (float) CRESCENDO_DURATION_MS);
+            float eased = 0.08f + 0.92f * (t * t * (3f - 2f * t));
+            try {
+              mediaPlayer.setVolume(eased, eased);
+            } catch (Exception ignored) {}
+            if (t < 1f) {
+              volumeHandler.postDelayed(this, 450L);
+            }
+          }
+        };
+        volumeHandler.postDelayed(volumeRunnable, 450L);
+      } else {
+        mediaPlayer.setVolume(1.0f, 1.0f);
+      }
+
       mediaPlayer.start();
     } catch (Exception ignored) {}
   }
 
   private void stopAlarmAudio() {
+    if (volumeRunnable != null) {
+      volumeHandler.removeCallbacks(volumeRunnable);
+      volumeRunnable = null;
+    }
+    volumeHandler.removeCallbacksAndMessages(null);
     if (mediaPlayer != null) {
       try {
         if (mediaPlayer.isPlaying()) {
@@ -239,22 +315,27 @@ public class AlarmForegroundService extends Service {
     }
   }
 
-  private void scheduleSnooze5Min() {
+  private long scheduleSnooze5Min() {
     long snoozeAtMs = System.currentTimeMillis() + 5 * 60 * 1000L;
     String nextTime = new SimpleDateFormat("hh:mm a", Locale.US).format(new Date(snoozeAtMs));
-    int reqCode = Math.abs(("snooze:" + currentId + ":" + snoozeAtMs).hashCode());
+    String snoozeSlotKey = currentId + "-snooze-" + snoozeAtMs;
+    int reqCode = Math.abs(snoozeSlotKey.hashCode());
     AlarmScheduler.scheduleSingle(
       this,
       reqCode,
-      "snooze-" + currentId,
+      currentId,
+      snoozeSlotKey,
       currentType,
       currentName,
       nextTime,
       snoozeAtMs
     );
+    return snoozeAtMs;
   }
 
   private void stopAlertAndSelf() {
+    isAlertActive = false;
+    activeSlotKey = "";
     stopAlarmAudio();
     stopAlarmVibration();
 
@@ -272,6 +353,8 @@ public class AlarmForegroundService extends Service {
 
   @Override
   public void onDestroy() {
+    isAlertActive = false;
+    activeSlotKey = "";
     stopAlarmAudio();
     stopAlarmVibration();
     super.onDestroy();

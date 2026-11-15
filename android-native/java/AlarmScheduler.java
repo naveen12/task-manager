@@ -15,8 +15,21 @@ public final class AlarmScheduler {
   private static final String PREFS_NAME = "kairo_native_prefs";
   private static final String KEY_ALERTS_JSON = "alerts_json";
   private static final String KEY_REQ_CODES = "scheduled_request_codes";
+  private static final String KEY_GRADUAL_VOLUME = "gradual_volume";
+  private static final String KEY_HANDLED_ALERTS = "handled_alerts_json";
+  private static final String KEY_MARKED_SLOTS = "marked_slots_set";
 
   private AlarmScheduler() {}
+
+  public static void setGradualVolumeEnabled(Context context, boolean enabled) {
+    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    prefs.edit().putBoolean(KEY_GRADUAL_VOLUME, enabled).apply();
+  }
+
+  public static boolean isGradualVolumeEnabled(Context context) {
+    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    return prefs.getBoolean(KEY_GRADUAL_VOLUME, true);
+  }
 
   public static void saveAndSchedule(Context context, String alertsJson) {
     SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
@@ -65,15 +78,17 @@ public final class AlarmScheduler {
       for (int i = 0; i < arr.length(); i++) {
         JSONObject obj = arr.getJSONObject(i);
         String id = obj.optString("id", "alert-" + i);
+        String slotKey = obj.optString("slotKey", id);
         String type = obj.optString("type", "alarm");
         String name = obj.optString("name", "Kairo Alert");
         String timeLabel = obj.optString("timeLabel", "");
         long triggerAtMs = obj.optLong("triggerAtMs", 0L);
 
         if (triggerAtMs <= nowMs + 500L) continue;
+        if (isSlotMarkedHandled(context, slotKey)) continue;
 
-        int reqCode = Math.abs((id + ":" + triggerAtMs).hashCode());
-        scheduleSingle(context, reqCode, id, type, name, timeLabel, triggerAtMs);
+        int reqCode = Math.abs((slotKey + ":" + triggerAtMs).hashCode());
+        scheduleSingle(context, reqCode, id, slotKey, type, name, timeLabel, triggerAtMs);
         newCodes.add(String.valueOf(reqCode));
       }
     } catch (Exception ignored) {}
@@ -85,6 +100,7 @@ public final class AlarmScheduler {
     Context context,
     int reqCode,
     String id,
+    String slotKey,
     String type,
     String name,
     String timeLabel,
@@ -95,6 +111,7 @@ public final class AlarmScheduler {
 
     Intent receiverIntent = new Intent(context, ExactAlarmReceiver.class);
     receiverIntent.putExtra("alert_id", id);
+    receiverIntent.putExtra("slot_key", slotKey);
     receiverIntent.putExtra("alert_type", type);
     receiverIntent.putExtra("alert_name", name);
     receiverIntent.putExtra("alert_time", timeLabel);
@@ -124,12 +141,84 @@ public final class AlarmScheduler {
         am.setExact(AlarmManager.RTC_WAKEUP, triggerAtMs, pi);
       }
     } catch (SecurityException secEx) {
-      // Fallback if SCHEDULE_EXACT_ALARM was revoked by user
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pi);
       } else {
         am.set(AlarmManager.RTC_WAKEUP, triggerAtMs, pi);
       }
     }
+  }
+
+  public static synchronized void markSlotHandled(Context context, String slotKey) {
+    if (slotKey == null || slotKey.isEmpty()) return;
+    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    Set<String> existing = new HashSet<>(prefs.getStringSet(KEY_MARKED_SLOTS, new HashSet<String>()));
+    existing.add(slotKey);
+    if (existing.size() > 120) {
+      // Keep bounded
+      Set<String> trimmed = new HashSet<>();
+      int count = 0;
+      for (String s : existing) {
+        if (count++ >= 60) break;
+        trimmed.add(s);
+      }
+      trimmed.add(slotKey);
+      existing = trimmed;
+    }
+    prefs.edit().putStringSet(KEY_MARKED_SLOTS, existing).apply();
+  }
+
+  public static synchronized boolean isSlotMarkedHandled(Context context, String slotKey) {
+    if (slotKey == null || slotKey.isEmpty()) return false;
+    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    Set<String> existing = prefs.getStringSet(KEY_MARKED_SLOTS, new HashSet<String>());
+    return existing.contains(slotKey);
+  }
+
+  public static synchronized void recordHandledAlert(
+    Context context,
+    String slotKey,
+    String id,
+    String type,
+    String name,
+    String timeLabel,
+    String action,
+    long snoozeUntilMs
+  ) {
+    if (slotKey == null || slotKey.isEmpty()) return;
+    markSlotHandled(context, slotKey);
+
+    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    try {
+      JSONArray existing = new JSONArray(prefs.getString(KEY_HANDLED_ALERTS, "[]"));
+      JSONArray updated = new JSONArray();
+      long nowMs = System.currentTimeMillis();
+
+      for (int i = 0; i < existing.length(); i++) {
+        JSONObject item = existing.getJSONObject(i);
+        long itemTs = item.optLong("updatedAtMs", 0L);
+        if (nowMs - itemTs > 24L * 60L * 60L * 1000L) continue;
+        if (slotKey.equals(item.optString("slotKey"))) continue;
+        updated.put(item);
+      }
+
+      JSONObject record = new JSONObject();
+      record.put("slotKey", slotKey);
+      record.put("id", id != null ? id : "");
+      record.put("type", type != null ? type : "alarm");
+      record.put("name", name != null ? name : "Kairo Alert");
+      record.put("timeLabel", timeLabel != null ? timeLabel : "");
+      record.put("action", action);
+      record.put("snoozeUntilMs", snoozeUntilMs);
+      record.put("updatedAtMs", nowMs);
+      updated.put(record);
+
+      prefs.edit().putString(KEY_HANDLED_ALERTS, updated.toString()).apply();
+    } catch (Exception ignored) {}
+  }
+
+  public static synchronized String getHandledAlertsJson(Context context) {
+    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    return prefs.getString(KEY_HANDLED_ALERTS, "[]");
   }
 }

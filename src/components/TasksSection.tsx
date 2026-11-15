@@ -7,6 +7,7 @@ import {
 } from '../types/chrono';
 import { TactileCheckbox } from './TactileCheckbox';
 import { soundEngine } from '../utils/soundEngine';
+import { CopyButton, PasteButton } from './ClipboardButtons';
 
 interface TasksSectionProps {
   tasks: TaskItem[];
@@ -240,12 +241,21 @@ export const TasksSection: React.FC<TasksSectionProps> = ({
           </div>
 
           <div>
-            <label
-              htmlFor="task-title-input"
-              className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-            >
-              Task Title
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label
+                htmlFor="task-title-input"
+                className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+              >
+                Task Title
+              </label>
+              <div className="flex items-center gap-1.5">
+                {title && <CopyButton text={title} ariaLabel="Copy task title" />}
+                <PasteButton
+                  targetInputId="task-title-input"
+                  onPasteText={(val) => setTitle((prev) => (prev ? `${prev} ${val}` : val))}
+                />
+              </div>
+            </div>
             <input
               id="task-title-input"
               type="text"
@@ -337,12 +347,21 @@ export const TasksSection: React.FC<TasksSectionProps> = ({
           </div>
 
           <div>
-            <label
-              htmlFor="task-details-input"
-              className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-1.5"
-            >
-              Details (optional)
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label
+                htmlFor="task-details-input"
+                className="block text-xs font-medium text-slate-600 dark:text-[#94A3B8]"
+              >
+                Details (optional)
+              </label>
+              <div className="flex items-center gap-1.5">
+                {details && <CopyButton text={details} ariaLabel="Copy task details" />}
+                <PasteButton
+                  targetInputId="task-details-input"
+                  onPasteText={(val) => setDetails((prev) => (prev ? `${prev} ${val}` : val))}
+                />
+              </div>
+            </div>
             <input
               id="task-details-input"
               type="text"
@@ -412,7 +431,7 @@ export const TasksSection: React.FC<TasksSectionProps> = ({
                   </div>
 
                   <p
-                    className={`mt-0.5 truncate text-[15px] font-medium ${
+                    className={`mt-0.5 truncate text-[15px] font-medium select-text ${
                       task.completed
                         ? 'line-through text-slate-400 dark:text-[#64748B]'
                         : 'text-slate-900 dark:text-[#F8FAFC]'
@@ -422,13 +441,20 @@ export const TasksSection: React.FC<TasksSectionProps> = ({
                   </p>
 
                   {task.details && !task.completed && (
-                    <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B]">
+                    <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B] select-text">
                       {task.details}
                     </p>
                   )}
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
+                  <CopyButton
+                    compact
+                    text={`${task.title} (${task.dueDate} ${task.dueTime})${
+                      task.details ? ` — ${task.details}` : ''
+                    }`}
+                    ariaLabel={`Copy task ${task.title}`}
+                  />
                   <button
                     type="button"
                     onClick={() => openEdit(task)}

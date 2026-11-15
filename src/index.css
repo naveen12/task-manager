@@ -52,6 +52,20 @@
   h1, h2, h3, h4 {
     font-family: var(--ct-font-display);
   }
+
+  input,
+  textarea,
+  p,
+  h1,
+  h2,
+  h3,
+  h4,
+  pre,
+  code,
+  .select-text {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 
 .tabular-nums {

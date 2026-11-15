@@ -33,10 +33,28 @@ public class KairoAlarmPlugin extends Plugin {
   @PluginMethod
   public void syncAlerts(PluginCall call) {
     String alertsJson = call.getString("alertsJson", "[]");
+    boolean gradualVolume = call.getBoolean("gradualVolume", true);
+    AlarmScheduler.setGradualVolumeEnabled(getContext(), gradualVolume);
     AlarmScheduler.saveAndSchedule(getContext(), alertsJson);
     JSObject ret = new JSObject();
     ret.put("scheduled", true);
     call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void consumeHandledAlerts(PluginCall call) {
+    JSObject ret = new JSObject();
+    ret.put("handledJson", AlarmScheduler.getHandledAlertsJson(getContext()));
+    ret.put("isAlertActive", AlarmForegroundService.isAlertActive);
+    ret.put("activeSlotKey", AlarmForegroundService.activeSlotKey);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void markAlertHandled(PluginCall call) {
+    String slotKey = call.getString("slotKey", "");
+    AlarmScheduler.markSlotHandled(getContext(), slotKey);
+    call.resolve();
   }
 
   @PluginMethod
@@ -110,26 +128,34 @@ public class KairoAlarmPlugin extends Plugin {
   @PluginMethod
   public void openExactAlarmSettings(PluginCall call) {
     if (Build.VERSION.SDK_INT >= 31) {
-      Intent intent = new Intent("android.settings.REQUEST_SCHEDULE_EXACT_ALARM");
-      intent.setData(Uri.parse("package:" + getContext().getPackageName()));
-      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-      getContext().startActivity(intent);
+      try {
+        Intent intent = new Intent("android.settings.REQUEST_SCHEDULE_EXACT_ALARM");
+        intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+      } catch (Exception e) {
+        openAppInfoFallback();
+      }
     }
     call.resolve();
   }
 
   @PluginMethod
   public void openFullScreenIntentSettings(PluginCall call) {
-    if (Build.VERSION.SDK_INT >= 34) {
-      Intent intent = new Intent("android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT");
-      intent.setData(Uri.parse("package:" + getContext().getPackageName()));
-      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-      getContext().startActivity(intent);
-    } else {
-      Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-      intent.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
-      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-      getContext().startActivity(intent);
+    try {
+      if (Build.VERSION.SDK_INT >= 34) {
+        Intent intent = new Intent("android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT");
+        intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+      } else {
+        Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+        intent.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+      }
+    } catch (Exception e) {
+      openAppInfoFallback();
     }
     call.resolve();
   }
@@ -137,25 +163,56 @@ public class KairoAlarmPlugin extends Plugin {
   @PluginMethod
   public void openOverlaySettings(PluginCall call) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      Intent intent = new Intent(
-        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-        Uri.parse("package:" + getContext().getPackageName())
-      );
-      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-      getContext().startActivity(intent);
+      try {
+        Intent intent = new Intent(
+          Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+          Uri.parse("package:" + getContext().getPackageName())
+        );
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+      } catch (Exception e) {
+        try {
+          Intent generic = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
+          generic.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+          getContext().startActivity(generic);
+        } catch (Exception e2) {
+          openAppInfoFallback();
+        }
+      }
     }
     call.resolve();
   }
 
   @PluginMethod
-  public void openBatterySettings(PluginCall call) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+  public void openAppInfoSettings(PluginCall call) {
+    openAppInfoFallback();
+    call.resolve();
+  }
+
+  private void openAppInfoFallback() {
+    try {
       Intent intent = new Intent(
-        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
         Uri.parse("package:" + getContext().getPackageName())
       );
       intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
       getContext().startActivity(intent);
+    } catch (Exception ignored) {}
+  }
+
+  @PluginMethod
+  public void openBatterySettings(PluginCall call) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      try {
+        Intent intent = new Intent(
+          Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+          Uri.parse("package:" + getContext().getPackageName())
+        );
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+      } catch (Exception e) {
+        openAppInfoFallback();
+      }
     }
     call.resolve();
   }

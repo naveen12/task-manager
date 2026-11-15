@@ -16,12 +16,14 @@ export interface AppSettings {
   theme: ThemeMode;
   fontSizePx: number;
   fontFamily: AppFontFamily;
+  gradualAlarmVolume: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   fontSizePx: 16,
   fontFamily: 'jakarta',
+  gradualAlarmVolume: true,
 };
 
 export interface TaskItem {

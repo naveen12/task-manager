@@ -10,10 +10,22 @@ import type { ActiveAlert } from './notificationEngine';
 
 export interface NativeScheduledAlert {
   id: string;
+  slotKey: string;
   type: 'alarm' | 'reminder' | 'task' | 'snooze';
   name: string;
   triggerAtMs: number;
   timeLabel: string;
+}
+
+export interface NativeHandledAlert {
+  slotKey: string;
+  id: string;
+  type: 'alarm' | 'reminder' | 'task' | 'snooze';
+  name: string;
+  timeLabel: string;
+  action: 'fired' | 'stopped' | 'snoozed';
+  snoozeUntilMs: number;
+  updatedAtMs: number;
 }
 
 export interface AndroidAlertPermissionsStatus {
@@ -26,14 +38,24 @@ export interface AndroidAlertPermissionsStatus {
 }
 
 interface KairoAlarmNativePlugin {
-  syncAlerts: (opts: { alertsJson: string }) => Promise<{ scheduled: number }>;
+  syncAlerts: (opts: {
+    alertsJson: string;
+    gradualVolume?: boolean;
+  }) => Promise<{ scheduled: number }>;
   getPermissionStatus: () => Promise<Omit<AndroidAlertPermissionsStatus, 'isNativeAndroid'>>;
   requestNotificationPermission: () => Promise<{ granted: boolean }>;
   openExactAlarmSettings: () => Promise<void>;
   openFullScreenIntentSettings: () => Promise<void>;
   openOverlaySettings: () => Promise<void>;
   openBatterySettings: () => Promise<void>;
+  openAppInfoSettings: () => Promise<void>;
   stopActiveAlert: (opts: { action: 'stop' | 'snooze' }) => Promise<void>;
+  consumeHandledAlerts: () => Promise<{
+    handledJson: string;
+    isAlertActive?: boolean;
+    activeSlotKey?: string;
+  }>;
+  markAlertHandled: (opts: { slotKey: string }) => Promise<void>;
 }
 
 interface CapacitorGlobal {
@@ -92,8 +114,10 @@ export function computeUpcomingNativeAlerts(
       if (alarm.days.length > 0 && !alarm.days.includes(candidate.getDay())) {
         continue;
       }
+      const dateStr = formatDateToYMD(candidate);
       list.push({
-        id: `alarm-${alarm.id}`,
+        id: alarm.id,
+        slotKey: `alarm:${alarm.id}:${dateStr}:${alarm.hour24}:${alarm.minute}`,
         type: 'alarm',
         name: alarm.label || 'Kairo Alarm',
         triggerAtMs: candidate.getTime(),
@@ -103,7 +127,7 @@ export function computeUpcomingNativeAlerts(
     }
   }
 
-  // 2. Next upcoming occurrence (within 30 days) for each active Reminder
+  // 2. Next upcoming occurrence (within 31 / 366 days) for each active Reminder
   for (const rem of reminders) {
     if (!rem.active || rem.completed) continue;
     const [hh, mm] = rem.time.split(':').map(Number);
@@ -124,7 +148,8 @@ export function computeUpcomingNativeAlerts(
       const dateStr = formatDateToYMD(candidate);
       if (doesReminderOccurOnDate(rem, dateStr)) {
         list.push({
-          id: `rem-${rem.id}`,
+          id: rem.id,
+          slotKey: `reminder:${rem.id}:${dateStr}:${rem.time}`,
           type: 'reminder',
           name: rem.title,
           triggerAtMs: candidate.getTime(),
@@ -144,7 +169,8 @@ export function computeUpcomingNativeAlerts(
     d.setHours(hh, mm, 0, 0);
     if (d.getTime() <= nowMs + 1000) continue;
     list.push({
-      id: `task-${task.id}`,
+      id: task.id,
+      slotKey: `task:${task.id}:${task.dueDate}:${task.dueTime}`,
       type: 'task',
       name: task.title,
       triggerAtMs: d.getTime(),
@@ -157,7 +183,8 @@ export function computeUpcomingNativeAlerts(
     if (s.triggerAtMs <= nowMs + 1000) continue;
     const d = new Date(s.triggerAtMs);
     list.push({
-      id: `snooze-${s.alert.sourceId}-${s.triggerAtMs}`,
+      id: s.alert.sourceId,
+      slotKey: `${s.alert.sourceId}-snooze-${s.triggerAtMs}`,
       type: s.alert.type,
       name: s.alert.name,
       triggerAtMs: s.triggerAtMs,
@@ -169,14 +196,50 @@ export function computeUpcomingNativeAlerts(
 }
 
 export async function syncNativeAndroidAlerts(
-  alerts: NativeScheduledAlert[]
+  alerts: NativeScheduledAlert[],
+  gradualVolume = true
 ): Promise<void> {
   const plugin = getKairoAlarmPlugin();
   if (!plugin) return;
   try {
-    await plugin.syncAlerts({ alertsJson: JSON.stringify(alerts) });
+    await plugin.syncAlerts({
+      alertsJson: JSON.stringify(alerts),
+      gradualVolume,
+    });
   } catch {
     // Ignore when native plugin not installed yet
+  }
+}
+
+export async function fetchNativeHandledAlerts(): Promise<{
+  handled: NativeHandledAlert[];
+  isAlertActive: boolean;
+  activeSlotKey: string;
+}> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.consumeHandledAlerts) {
+    return { handled: [], isAlertActive: false, activeSlotKey: '' };
+  }
+  try {
+    const res = await plugin.consumeHandledAlerts();
+    const parsed = JSON.parse(res.handledJson || '[]') as NativeHandledAlert[];
+    return {
+      handled: Array.isArray(parsed) ? parsed : [],
+      isAlertActive: Boolean(res.isAlertActive),
+      activeSlotKey: res.activeSlotKey ?? '',
+    };
+  } catch {
+    return { handled: [], isAlertActive: false, activeSlotKey: '' };
+  }
+}
+
+export async function markNativeSlotHandled(slotKey: string): Promise<void> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.markAlertHandled || !slotKey) return;
+  try {
+    await plugin.markAlertHandled({ slotKey });
+  } catch {
+    // Ignore
   }
 }
 
@@ -212,7 +275,8 @@ export type AndroidPermissionAction =
   | 'exactAlarm'
   | 'fullScreen'
   | 'overlay'
-  | 'battery';
+  | 'battery'
+  | 'appInfo';
 
 export async function triggerAndroidPermissionSetting(
   kind: AndroidPermissionAction
@@ -230,6 +294,8 @@ export async function triggerAndroidPermissionSetting(
       await plugin.openOverlaySettings();
     } else if (kind === 'battery') {
       await plugin.openBatterySettings();
+    } else if (kind === 'appInfo') {
+      await plugin.openAppInfoSettings?.();
     }
   } catch {
     // Ignore
