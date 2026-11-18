@@ -1,24 +1,40 @@
 package __PACKAGE__;
 
 import android.Manifest;
+import android.app.Activity;
 import android.app.AlarmManager;
 import android.app.NotificationManager;
+import android.content.ActivityNotFoundException;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.os.PowerManager;
+import android.provider.MediaStore;
 import android.provider.Settings;
+import android.speech.RecognizerIntent;
+import androidx.activity.result.ActivityResult;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Locale;
 
 @CapacitorPlugin(
   name = "KairoAlarm",
@@ -97,12 +113,15 @@ public class KairoAlarmPlugin extends Plugin {
       batteryIgnored = pm != null && pm.isIgnoringBatteryOptimizations(ctx.getPackageName());
     }
 
+    boolean dndAccess = FocusDndManager.isDndAccessGranted(ctx);
+
     JSObject ret = new JSObject();
     ret.put("postNotifications", postNotifications);
     ret.put("exactAlarms", exactAlarms);
     ret.put("fullScreenIntent", fullScreenIntent);
     ret.put("overlayPermission", overlayPermission);
     ret.put("batteryOptimizationIgnored", batteryIgnored);
+    ret.put("dndAccess", dndAccess);
     call.resolve(ret);
   }
 
@@ -218,6 +237,53 @@ public class KairoAlarmPlugin extends Plugin {
   }
 
   @PluginMethod
+  public void openDndSettings(PluginCall call) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      try {
+        Intent intent = new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+      } catch (Exception e) {
+        openAppInfoFallback();
+      }
+    }
+    call.resolve();
+  }
+
+  @PluginMethod
+  public void setFocusDndState(PluginCall call) {
+    boolean enabled = call.getBoolean("enabled", false);
+    boolean enableDnd = call.getBoolean("enableDnd", true);
+    boolean allowAlarms = call.getBoolean("allowAlarms", true);
+    long endsAtMs = call.getLong("endsAtMs", 0L);
+    String focusLabel = call.getString("focusLabel", "Focus Session Complete");
+    String timeLabel = call.getString("timeLabel", "");
+
+    Context ctx = getContext();
+    boolean dndGranted = FocusDndManager.isDndAccessGranted(ctx);
+    boolean dndApplied = false;
+
+    if (enabled) {
+      if (enableDnd && dndGranted) {
+        dndApplied = FocusDndManager.enableFocusDnd(ctx, allowAlarms);
+      } else if (!enableDnd) {
+        FocusDndManager.restoreFocusDnd(ctx);
+      }
+      if (endsAtMs > System.currentTimeMillis() + 500L) {
+        FocusDndManager.scheduleFocusEnd(ctx, endsAtMs, focusLabel, timeLabel);
+      }
+    } else {
+      FocusDndManager.cancelFocusEnd(ctx);
+      FocusDndManager.restoreFocusDnd(ctx);
+    }
+
+    JSObject ret = new JSObject();
+    ret.put("dndGranted", dndGranted);
+    ret.put("dndApplied", dndApplied);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
   public void stopActiveAlert(PluginCall call) {
     String action = call.getString("action", "stop");
     Intent intent = new Intent(getContext(), AlarmForegroundService.class);
@@ -228,5 +294,137 @@ public class KairoAlarmPlugin extends Plugin {
       getContext().startService(intent);
     } catch (Exception ignored) {}
     call.resolve();
+  }
+
+  @PluginMethod
+  public void startVoiceDictation(PluginCall call) {
+    String prompt = call.getString("prompt", "Speak your note...");
+    Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+    intent.putExtra(
+      RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+      RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+    );
+    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+    intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
+    try {
+      startActivityForResult(call, intent, "handleVoiceResult");
+    } catch (ActivityNotFoundException e) {
+      call.reject("Voice dictation is not supported on this device.");
+    }
+  }
+
+  @ActivityCallback
+  private void handleVoiceResult(PluginCall call, ActivityResult result) {
+    if (call == null) return;
+    String text = "";
+    if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+      ArrayList<String> matches = result
+        .getData()
+        .getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+      if (matches != null && !matches.isEmpty() && matches.get(0) != null) {
+        text = matches.get(0);
+      }
+    }
+    JSObject ret = new JSObject();
+    ret.put("text", text);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void exportBackupFile(PluginCall call) {
+    String rawName = call.getString("fileName", "kairo-backup.json");
+    String content = call.getString("content", "{}");
+    String safeName = (rawName != null && !rawName.trim().isEmpty())
+      ? rawName.trim().replaceAll("[^a-zA-Z0-9._-]", "_")
+      : "kairo-backup.json";
+
+    Context ctx = getContext();
+    try {
+      byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        ContentResolver resolver = ctx.getContentResolver();
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+        values.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+        values.put(
+          MediaStore.Downloads.RELATIVE_PATH,
+          Environment.DIRECTORY_DOWNLOADS + "/Kairo"
+        );
+        Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+        if (uri != null) {
+          try (OutputStream os = resolver.openOutputStream(uri)) {
+            if (os != null) {
+              os.write(bytes);
+              os.flush();
+              JSObject ret = new JSObject();
+              ret.put("saved", true);
+              ret.put("location", "Internal Storage/Download/Kairo/" + safeName);
+              ret.put("fileName", safeName);
+              call.resolve(ret);
+              return;
+            }
+          }
+        }
+      }
+
+      File baseDir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+      if (baseDir == null) {
+        baseDir = ctx.getFilesDir();
+      }
+      File dir = new File(baseDir, "Kairo");
+      if (!dir.exists()) {
+        dir.mkdirs();
+      }
+      File outFile = new File(dir, safeName);
+      try (FileOutputStream fos = new FileOutputStream(outFile)) {
+        fos.write(bytes);
+        fos.flush();
+      }
+
+      JSObject ret = new JSObject();
+      ret.put("saved", true);
+      ret.put("location", outFile.getAbsolutePath());
+      ret.put("fileName", safeName);
+      call.resolve(ret);
+    } catch (Exception e) {
+      call.reject("Unable to export backup file: " + e.getMessage());
+    }
+  }
+
+  @PluginMethod
+  public void updateWidgetSummary(PluginCall call) {
+    int tasksLeft = call.getInt("tasksLeft", 0);
+    int remindersLeft = call.getInt("remindersLeft", 0);
+    String nextAlarm = call.getString("nextAlarm", "Off");
+    String nextTaskTitle = call.getString("nextTaskTitle", "All caught up today");
+
+    Context ctx = getContext();
+    SharedPreferences prefs = ctx.getSharedPreferences("kairo_native_prefs", Context.MODE_PRIVATE);
+    prefs.edit()
+      .putInt("widget_tasks_left", Math.max(0, tasksLeft))
+      .putInt("widget_reminders_left", Math.max(0, remindersLeft))
+      .putString("widget_next_alarm", nextAlarm != null ? nextAlarm : "Off")
+      .putString("widget_next_task", nextTaskTitle != null ? nextTaskTitle : "All caught up today")
+      .apply();
+
+    KairoQuickWidgetProvider.updateAllWidgets(ctx);
+
+    JSObject ret = new JSObject();
+    ret.put("updated", true);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void consumePendingQuickAdd(PluginCall call) {
+    Context ctx = getContext();
+    SharedPreferences prefs = ctx.getSharedPreferences("kairo_native_prefs", Context.MODE_PRIVATE);
+    String target = prefs.getString("pending_quick_add_target", "");
+    if (target != null && !target.isEmpty()) {
+      prefs.edit().remove("pending_quick_add_target").apply();
+    }
+    JSObject ret = new JSObject();
+    ret.put("target", target != null ? target : "");
+    call.resolve(ret);
   }
 }

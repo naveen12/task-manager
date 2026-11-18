@@ -4,10 +4,12 @@ import path from 'node:path';
 const rootDir = process.cwd();
 const androidDir = path.join(rootDir, 'android');
 const templateJavaDir = path.join(rootDir, 'android-native', 'java');
+const templateResDir = path.join(rootDir, 'android-native', 'res');
 const manifestPath = path.join(androidDir, 'app', 'src', 'main', 'AndroidManifest.xml');
 const gradleGroovyPath = path.join(androidDir, 'app', 'build.gradle');
 const gradleKtsPath = path.join(androidDir, 'app', 'build.gradle.kts');
 const androidJavaRoot = path.join(androidDir, 'app', 'src', 'main', 'java');
+const androidResRoot = path.join(androidDir, 'app', 'src', 'main', 'res');
 
 function fail(message) {
   console.error(`\n[Kairo Android Setup] ${message}\n`);
@@ -83,6 +85,25 @@ function copyJavaTemplates(packageName) {
   }
 }
 
+function copyResTemplates() {
+  if (!fs.existsSync(templateResDir)) return;
+  const copyDirRecursive = (srcDir, destDir) => {
+    fs.mkdirSync(destDir, { recursive: true });
+    const entries = fs.readdirSync(srcDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = path.join(srcDir, entry.name);
+      const destPath = path.join(destDir, entry.name);
+      if (entry.isDirectory()) {
+        copyDirRecursive(srcPath, destPath);
+      } else {
+        fs.copyFileSync(srcPath, destPath);
+        console.log(`+ Installed ${path.relative(rootDir, destPath)}`);
+      }
+    }
+  };
+  copyDirRecursive(templateResDir, androidResRoot);
+}
+
 function patchManifest() {
   if (!fs.existsSync(manifestPath)) {
     fail('AndroidManifest.xml not found. Run "npx cap add android" first.');
@@ -102,6 +123,7 @@ function patchManifest() {
     'android.permission.RECEIVE_BOOT_COMPLETED',
     'android.permission.VIBRATE',
     'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+    'android.permission.ACCESS_NOTIFICATION_POLICY',
   ];
 
   const missingPermissions = requiredPermissions
@@ -164,6 +186,21 @@ function patchManifest() {
             </intent-filter>
         </receiver>`,
     },
+    {
+      marker: '.KairoQuickWidgetProvider',
+      snippet: `
+        <receiver
+            android:name=".KairoQuickWidgetProvider"
+            android:exported="true"
+            android:label="Kairo Quick Add">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/kairo_quick_add_widget_info" />
+        </receiver>`,
+    },
   ];
 
   const toInsert = componentSnippets
@@ -221,6 +258,7 @@ if (!fs.existsSync(androidDir)) {
 const packageName = detectPackageName();
 console.log(`[Kairo Android Setup] Detected Android package: ${packageName}`);
 copyJavaTemplates(packageName);
+copyResTemplates();
 patchManifest();
 ensureLocalProperties();
-console.log('[Kairo Android Setup] Native lock-screen alarm, notification & permission support applied successfully.');
+console.log('[Kairo Android Setup] Native lock-screen alarm, widget, notification & permission support applied successfully.');

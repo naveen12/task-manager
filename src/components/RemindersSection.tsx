@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
   getTodayDateString,
+  PRIORITY_META,
   type PriorityLevel,
   type ReminderItem,
   type ReminderRepeat,
@@ -23,12 +24,6 @@ interface RemindersSectionProps {
 }
 
 type ReminderFilter = 'all' | 'active' | 'completed';
-
-const PRIORITY_STYLES: Record<PriorityLevel, { label: string; textClass: string }> = {
-  high: { label: 'High priority', textClass: 'text-amber-600 dark:text-[#F59E0B]' },
-  medium: { label: 'Medium priority', textClass: 'text-indigo-600 dark:text-[#818CF8]' },
-  low: { label: 'Low priority', textClass: 'text-slate-500 dark:text-[#94A3B8]' },
-};
 
 export const RemindersSection: React.FC<RemindersSectionProps> = ({
   reminders,
@@ -199,9 +194,9 @@ export const RemindersSection: React.FC<RemindersSectionProps> = ({
           className="min-h-[40px] rounded-full bg-white dark:bg-[#12141F] px-3.5 text-xs font-medium text-slate-700 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/[0.08] focus:border-[#6366F1] focus:outline-none cursor-pointer"
         >
           <option value="all">All priorities</option>
-          <option value="high">High priority</option>
-          <option value="medium">Medium priority</option>
-          <option value="low">Low priority</option>
+          <option value="high">P1 Critical</option>
+          <option value="medium">P2 Medium</option>
+          <option value="low">P3 Low</option>
         </select>
       </div>
 
@@ -311,22 +306,18 @@ export const RemindersSection: React.FC<RemindersSectionProps> = ({
                 Priority
               </span>
               <div className="grid grid-cols-3 gap-1 rounded-2xl bg-slate-100 dark:bg-[#12141F] p-1 border border-slate-200 dark:border-white/[0.06] min-h-[48px]">
-                {(['low', 'medium', 'high'] as const).map((p) => (
+                {(['high', 'medium', 'low'] as const).map((p) => (
                   <button
                     key={p}
                     type="button"
                     onClick={() => setPriority(p)}
-                    className={`rounded-xl text-xs font-medium capitalize transition-all cursor-pointer ${
+                    className={`rounded-xl px-1.5 text-[11px] font-semibold transition-all cursor-pointer ${
                       priority === p
-                        ? p === 'high'
-                          ? 'bg-amber-500/20 text-amber-700 dark:text-[#F59E0B] border border-amber-500/40'
-                          : p === 'medium'
-                            ? 'bg-indigo-500/15 text-indigo-700 dark:text-[#818CF8] border border-indigo-500/40'
-                            : 'bg-white dark:bg-[#1A1D2D] text-slate-900 dark:text-[#F8FAFC] border border-slate-300 dark:border-white/15'
+                        ? `${PRIORITY_META[p].bgClass} ${PRIORITY_META[p].textClass} border ${PRIORITY_META[p].borderClass}`
                         : 'text-slate-500 dark:text-[#94A3B8]'
                     }`}
                   >
-                    {p}
+                    {PRIORITY_META[p].shortLabel}
                   </button>
                 ))}
               </div>
@@ -391,7 +382,7 @@ export const RemindersSection: React.FC<RemindersSectionProps> = ({
       ) : (
         <div className="flex flex-col gap-2.5">
           {filtered.map((item) => {
-            const pInfo = PRIORITY_STYLES[item.priority ?? 'medium'];
+            const pInfo = PRIORITY_META[item.priority ?? 'medium'];
             return (
               <div
                 key={item.id}

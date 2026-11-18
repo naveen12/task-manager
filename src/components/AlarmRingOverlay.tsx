@@ -66,6 +66,13 @@ export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
 
   const style = TYPE_STYLE[alert.type];
   const TypeIcon = style.Icon ?? BellRing;
+  const snoozeMins = alert.snoozeMinutes && alert.snoozeMinutes > 0 ? alert.snoozeMinutes : 5;
+  const modeLabel =
+    alert.vibrationMode === 'vibrate_only'
+      ? ' · Vibrate Only'
+      : alert.vibrationMode === 'sound_only'
+      ? ' · Sound Only'
+      : '';
 
   return (
     <div
@@ -90,7 +97,7 @@ export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
         </div>
 
         <p className={`relative z-10 text-xs font-semibold tracking-wider uppercase tabular-nums ${style.accentText}`}>
-          {style.label} · {alert.timeLabel}
+          {style.label} · {alert.timeLabel}{modeLabel}
         </p>
 
         {/* Minimal Info 2: Name */}
@@ -115,7 +122,7 @@ export const AlarmRingOverlay: React.FC<AlarmRingOverlayProps> = ({
             className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-100 dark:bg-white/[0.08] px-4 text-sm font-semibold text-slate-900 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/15 hover:bg-slate-200/80 dark:hover:bg-white/15 active:scale-[0.98] transition-all cursor-pointer whitespace-nowrap"
           >
             <Clock className={`h-4 w-4 shrink-0 ${style.accentText}`} />
-            <span>Snooze 5m</span>
+            <span>Snooze {snoozeMins}m</span>
           </button>
 
           <button

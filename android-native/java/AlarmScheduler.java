@@ -84,11 +84,25 @@ public final class AlarmScheduler {
         String timeLabel = obj.optString("timeLabel", "");
         long triggerAtMs = obj.optLong("triggerAtMs", 0L);
 
+        int snoozeMinutes = Math.max(1, obj.optInt("snoozeMinutes", 5));
+        String vibrationMode = obj.optString("vibrationMode", "sound_and_vibrate");
+
         if (triggerAtMs <= nowMs + 500L) continue;
         if (isSlotMarkedHandled(context, slotKey)) continue;
 
         int reqCode = Math.abs((slotKey + ":" + triggerAtMs).hashCode());
-        scheduleSingle(context, reqCode, id, slotKey, type, name, timeLabel, triggerAtMs);
+        scheduleSingle(
+          context,
+          reqCode,
+          id,
+          slotKey,
+          type,
+          name,
+          timeLabel,
+          triggerAtMs,
+          snoozeMinutes,
+          vibrationMode
+        );
         newCodes.add(String.valueOf(reqCode));
       }
     } catch (Exception ignored) {}
@@ -106,6 +120,32 @@ public final class AlarmScheduler {
     String timeLabel,
     long triggerAtMs
   ) {
+    scheduleSingle(
+      context,
+      reqCode,
+      id,
+      slotKey,
+      type,
+      name,
+      timeLabel,
+      triggerAtMs,
+      5,
+      "sound_and_vibrate"
+    );
+  }
+
+  public static void scheduleSingle(
+    Context context,
+    int reqCode,
+    String id,
+    String slotKey,
+    String type,
+    String name,
+    String timeLabel,
+    long triggerAtMs,
+    int snoozeMinutes,
+    String vibrationMode
+  ) {
     AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
     if (am == null) return;
 
@@ -115,6 +155,11 @@ public final class AlarmScheduler {
     receiverIntent.putExtra("alert_type", type);
     receiverIntent.putExtra("alert_name", name);
     receiverIntent.putExtra("alert_time", timeLabel);
+    receiverIntent.putExtra("snooze_minutes", Math.max(1, snoozeMinutes));
+    receiverIntent.putExtra(
+      "vibration_mode",
+      vibrationMode != null ? vibrationMode : "sound_and_vibrate"
+    );
 
     PendingIntent pi = PendingIntent.getBroadcast(
       context,

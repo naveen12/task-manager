@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   Cloud,
   CloudUpload,
@@ -13,6 +14,9 @@ import {
   Upload,
 } from 'lucide-react';
 import type {
+  AppSettings,
+  AutoBackupDestination,
+  AutoBackupFrequency,
   ChronoAlarm,
   NoteItem,
   ReminderItem,
@@ -38,7 +42,14 @@ import {
 } from '../utils/googleDriveBackup';
 import { soundEngine } from '../utils/soundEngine';
 import { CopyButton, PasteButton } from './ClipboardButtons';
+import { GlowingToggle } from './GlowingToggle';
 import { readTextFromClipboard } from '../utils/clipboard';
+import {
+  isNativeAndroidPlatform,
+  saveNativeAndroidBackup,
+} from '../utils/nativeAndroidBridge';
+
+export const WEB_AUTO_BACKUP_STORAGE_KEY = 'kairo_auto_backup_latest_v1';
 
 interface BackupSectionProps {
   user: User | null;
@@ -49,6 +60,9 @@ interface BackupSectionProps {
   alarms: ChronoAlarm[];
   notes: NoteItem[];
   onRestoreBackup: (payload: ChronoBackupPayload) => void;
+  settings: AppSettings;
+  onUpdateSettings: (next: AppSettings) => void;
+  onRunAutoBackupNow?: () => Promise<void>;
 }
 
 type PendingConfirmAction =
@@ -84,6 +98,9 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
   alarms,
   notes,
   onRestoreBackup,
+  settings,
+  onUpdateSettings,
+  onRunAutoBackupNow,
 }) => {
   const [backups, setBackups] = useState<DriveBackupFile[]>([]);
   const [backupName, setBackupName] = useState<string>(
@@ -93,8 +110,10 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
+  const [isRunningAutoBackup, setIsRunningAutoBackup] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lastExportPath, setLastExportPath] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] =
     useState<PendingConfirmAction | null>(null);
 
@@ -243,19 +262,43 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
     }
   };
 
-  const handleLocalExport = () => {
+  const handleLocalExport = async () => {
     soundEngine.playTick(920, 0.025);
+    setErrorMessage(null);
+    const fileName = formatDefaultBackupFilename();
     const payload = buildBackupPayload({ tasks, reminders, alarms, notes });
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    const serialized = JSON.stringify(payload, null, 2);
+
+    if (isNativeAndroidPlatform()) {
+      const nativeRes = await saveNativeAndroidBackup(fileName, serialized);
+      if (nativeRes.supported) {
+        if (nativeRes.saved && nativeRes.location) {
+          setLastExportPath(nativeRes.location);
+          setStatusMessage(`Backup exported to ${nativeRes.location}`);
+        } else {
+          setErrorMessage(
+            nativeRes.error ?? 'Failed to save backup file on device.'
+          );
+        }
+        return;
+      }
+    }
+
+    const blob = new Blob([serialized], {
       type: 'application/json',
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = formatDefaultBackupFilename();
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
-    setStatusMessage('Downloaded local JSON backup file.');
+
+    const browserPath = `Downloads/${fileName}`;
+    setLastExportPath(browserPath);
+    setStatusMessage(
+      `Backup exported to your browser's ${browserPath} folder.`
+    );
   };
 
   const handleLocalFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -273,7 +316,7 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
         !Array.isArray(parsed.data.alarms) ||
         !Array.isArray(parsed.data.notes)
       ) {
-        throw new Error('Selected file is not a valid Kairo backup JSON.');
+        throw new Error('Selected file is not a valid Kairo backup file.');
       }
       setConfirmAction({
         type: 'restoreLocal',
@@ -287,12 +330,12 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
     }
   };
 
-  const handlePasteJsonRestore = async () => {
+  const handlePasteBackupRestore = async () => {
     setErrorMessage(null);
     setStatusMessage(null);
     const text = await readTextFromClipboard();
     if (!text) {
-      setErrorMessage('Clipboard is empty or blocked. Copy a Kairo JSON backup first, or use Import JSON.');
+      setErrorMessage('Clipboard is empty or blocked. Copy a Kairo backup first, or use Import Backup.');
       return;
     }
     try {
@@ -305,16 +348,16 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
         !Array.isArray(parsed.data.alarms) ||
         !Array.isArray(parsed.data.notes)
       ) {
-        throw new Error('Clipboard text is not a valid Kairo backup JSON.');
+        throw new Error('Clipboard text is not a valid Kairo backup.');
       }
       setConfirmAction({
         type: 'restoreLocal',
         payload: parsed as ChronoBackupPayload,
-        fileName: 'Clipboard JSON',
+        fileName: 'Clipboard Backup',
       });
     } catch (err) {
       setErrorMessage(
-        err instanceof Error ? err.message : 'Clipboard does not contain valid JSON.'
+        err instanceof Error ? err.message : 'Clipboard does not contain a valid backup.'
       );
     }
   };
@@ -576,56 +619,262 @@ export const BackupSection: React.FC<BackupSectionProps> = ({
         )}
       </div>
 
-      {/* Local JSON Export / Import Card */}
-      <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/60 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs dark:shadow-none">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
-            Local File Export & Import
-          </h3>
-          <p className="mt-0.5 text-xs text-slate-600 dark:text-[#94A3B8]">
-            Download an offline JSON copy or restore from a local backup file.
-          </p>
+      {/* Backup Export & Import Card */}
+      <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/60 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 flex flex-col gap-4 shadow-xs dark:shadow-none">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
+              Backup Export &amp; Import
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-600 dark:text-[#94A3B8]">
+              {isNativeAndroidPlatform()
+                ? 'Saves exported backups to Internal Storage/Download/Kairo/ or restores from a saved backup.'
+                : 'Downloads exported backups to your Downloads folder or restores from a saved backup.'}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <CopyButton
+              label="Copy Backup"
+              ariaLabel="Copy entire Kairo backup"
+              text={JSON.stringify(
+                buildBackupPayload({ tasks, reminders, alarms, notes }),
+                null,
+                2
+              )}
+              className="h-11 px-4 text-xs"
+            />
+
+            <button
+              type="button"
+              onClick={() => void handlePasteBackupRestore()}
+              className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              Paste Backup
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleLocalExport()}
+              className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              <Download className="h-4 w-4 text-indigo-600 dark:text-[#818CF8]" />
+              Export Backup
+            </button>
+
+            <label className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer">
+              <Upload className="h-4 w-4 text-emerald-600 dark:text-[#34D399]" />
+              <span>Import Backup</span>
+              <input
+                type="file"
+                accept="application/json,.json"
+                onChange={handleLocalFilePick}
+                className="sr-only"
+              />
+            </label>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <CopyButton
-            label="Copy JSON"
-            ariaLabel="Copy entire Kairo backup as JSON"
-            text={JSON.stringify(
-              buildBackupPayload({ tasks, reminders, alarms, notes }),
-              null,
-              2
-            )}
-            className="h-11 px-4 text-xs"
-          />
-
-          <button
-            type="button"
-            onClick={() => void handlePasteJsonRestore()}
-            className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
-          >
-            Paste JSON
-          </button>
-
-          <button
-            type="button"
-            onClick={handleLocalExport}
-            className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
-          >
-            <Download className="h-4 w-4 text-indigo-600 dark:text-[#818CF8]" />
-            Export JSON
-          </button>
-
-          <label className="flex h-11 items-center gap-2 rounded-full bg-slate-100 dark:bg-white/[0.05] px-4 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer">
-            <Upload className="h-4 w-4 text-emerald-600 dark:text-[#34D399]" />
-            <span>Import JSON</span>
-            <input
-              type="file"
-              accept="application/json,.json"
-              onChange={handleLocalFilePick}
-              className="sr-only"
+        {lastExportPath && (
+          <div className="rounded-2xl bg-slate-50 dark:bg-[#12141F] border border-slate-200 dark:border-white/[0.06] px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-medium text-slate-500 dark:text-[#64748B]">
+                Last Exported Backup Location
+              </p>
+              <p className="mt-0.5 font-mono text-xs text-slate-900 dark:text-[#F8FAFC] break-all select-text">
+                {lastExportPath}
+              </p>
+            </div>
+            <CopyButton
+              text={lastExportPath}
+              ariaLabel="Copy exported backup path"
+              label="Copy Path"
             />
-          </label>
+          </div>
+        )}
+      </div>
+
+      {/* Scheduled Auto-Backup Card */}
+      <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/60 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 flex flex-col gap-4 shadow-xs dark:shadow-none">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 dark:bg-[#6366F1]/15 text-indigo-600 dark:text-[#818CF8]">
+              <CalendarClock className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                Scheduled Auto-Backup
+              </h3>
+              <p className="mt-0.5 text-xs text-slate-600 dark:text-[#94A3B8]">
+                {isNativeAndroidPlatform()
+                  ? 'Automatically saves snapshots to Internal Storage/Download/Kairo/ and/or Google Drive on schedule.'
+                  : 'Automatically saves a local snapshot in Kairo and/or syncs kairo-auto-backup.json to Google Drive.'}
+              </p>
+            </div>
+          </div>
+          <GlowingToggle
+            checked={settings.autoBackupEnabled}
+            onChange={(next) =>
+              onUpdateSettings({ ...settings, autoBackupEnabled: next })
+            }
+            ariaLabel="Toggle scheduled auto-backup"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-white/[0.06]">
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 dark:text-[#94A3B8] mb-2">
+              Frequency
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  { id: 'daily', label: 'Daily' },
+                  { id: 'weekly', label: 'Weekly' },
+                ] as { id: AutoBackupFrequency; label: string }[]
+              ).map((freq) => {
+                const active = settings.autoBackupFrequency === freq.id;
+                return (
+                  <button
+                    key={freq.id}
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playTick(820, 0.015);
+                      onUpdateSettings({
+                        ...settings,
+                        autoBackupFrequency: freq.id,
+                      });
+                    }}
+                    className={`min-h-[38px] rounded-full px-4 text-xs font-semibold border transition-all cursor-pointer ${
+                      active
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-slate-100 dark:bg-[#12141F] text-slate-700 dark:text-[#94A3B8] border-slate-200 dark:border-white/[0.08] hover:text-slate-900 dark:hover:text-[#F8FAFC]'
+                    }`}
+                  >
+                    {freq.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 dark:text-[#94A3B8] mb-2">
+              Destination
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  { id: 'local', label: 'Local' },
+                  { id: 'drive', label: 'Google Drive' },
+                  { id: 'both', label: 'Both' },
+                ] as { id: AutoBackupDestination; label: string }[]
+              ).map((dest) => {
+                const active = settings.autoBackupDestination === dest.id;
+                return (
+                  <button
+                    key={dest.id}
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playTick(820, 0.015);
+                      onUpdateSettings({
+                        ...settings,
+                        autoBackupDestination: dest.id,
+                      });
+                    }}
+                    className={`min-h-[38px] rounded-full px-3.5 text-xs font-semibold border transition-all cursor-pointer ${
+                      active
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-slate-100 dark:bg-[#12141F] text-slate-700 dark:text-[#94A3B8] border-slate-200 dark:border-white/[0.08] hover:text-slate-900 dark:hover:text-[#F8FAFC]'
+                    }`}
+                  >
+                    {dest.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {(settings.autoBackupDestination === 'drive' ||
+          settings.autoBackupDestination === 'both') &&
+          needsAuth && (
+            <p className="text-xs text-amber-600 dark:text-[#F59E0B]">
+              Sign in with Google above so scheduled Drive backups can upload automatically while your session is active.
+            </p>
+          )}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 dark:border-white/[0.06]">
+          <div className="min-w-0 flex-1 text-xs text-slate-600 dark:text-[#94A3B8]">
+            {settings.lastAutoBackupAt ? (
+              <>
+                <span className="font-medium text-slate-800 dark:text-[#F8FAFC]">
+                  Last run: {formatModified(settings.lastAutoBackupAt)}
+                </span>
+                {settings.lastAutoBackupStatus && (
+                  <span className="block mt-0.5 text-[11px] text-slate-500 dark:text-[#94A3B8] break-words">
+                    {settings.lastAutoBackupStatus}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span>No auto-backup has run yet.</span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {!isNativeAndroidPlatform() &&
+              typeof localStorage !== 'undefined' &&
+              Boolean(localStorage.getItem(WEB_AUTO_BACKUP_STORAGE_KEY)) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cached = localStorage.getItem(WEB_AUTO_BACKUP_STORAGE_KEY);
+                    if (!cached) return;
+                    const blob = new Blob([cached], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = formatDefaultBackupFilename();
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    setStatusMessage('Downloaded latest auto-backup snapshot.');
+                  }}
+                  className="flex h-10 items-center gap-1.5 rounded-full bg-slate-100 dark:bg-white/[0.05] px-3.5 text-xs font-medium text-slate-800 dark:text-[#F8FAFC] border border-slate-200 dark:border-white/10 hover:bg-slate-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5 text-indigo-600 dark:text-[#818CF8]" />
+                  Download Latest Snapshot
+                </button>
+              )}
+
+            {onRunAutoBackupNow && (
+              <button
+                type="button"
+                disabled={isRunningAutoBackup}
+                onClick={async () => {
+                  setIsRunningAutoBackup(true);
+                  setErrorMessage(null);
+                  try {
+                    await onRunAutoBackupNow();
+                    soundEngine.playCompletionChime();
+                    setStatusMessage('Auto-backup snapshot completed.');
+                  } catch (err) {
+                    setErrorMessage(
+                      err instanceof Error ? err.message : 'Auto-backup failed.'
+                    );
+                  } finally {
+                    setIsRunningAutoBackup(false);
+                  }
+                }}
+                className="flex h-10 items-center gap-1.5 rounded-full bg-gradient-to-r from-[#6366F1] to-[#818CF8] px-4 text-xs font-semibold text-white shadow-[0_0_16px_rgba(99,102,241,0.35)] active:scale-[0.98] disabled:opacity-60 transition-all cursor-pointer"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${isRunningAutoBackup ? 'animate-spin' : ''}`}
+                />
+                {isRunningAutoBackup ? 'Backing up...' : 'Back Up Now'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

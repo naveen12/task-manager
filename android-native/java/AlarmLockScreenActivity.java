@@ -51,6 +51,7 @@ public class AlarmLockScreenActivity extends Activity {
     String type = getIntent().getStringExtra("alert_type");
     String name = getIntent().getStringExtra("alert_name");
     String time = getIntent().getStringExtra("alert_time");
+    int snoozeMinutes = Math.max(1, getIntent().getIntExtra("snooze_minutes", 5));
 
     String typeLabel = "ALARM";
     int accentColor = Color.parseColor("#F59E0B");
@@ -60,6 +61,9 @@ public class AlarmLockScreenActivity extends Activity {
     } else if ("task".equalsIgnoreCase(type)) {
       typeLabel = "TASK";
       accentColor = Color.parseColor("#818CF8");
+    } else if ("focus".equalsIgnoreCase(type)) {
+      typeLabel = "FOCUS COMPLETE";
+      accentColor = Color.parseColor("#34D399");
     }
 
     String displayName = (name != null && !name.isEmpty()) ? name : "Kairo Alert";
@@ -110,7 +114,7 @@ public class AlarmLockScreenActivity extends Activity {
     buttonRow.setGravity(Gravity.CENTER);
 
     Button snoozeBtn = new Button(this);
-    snoozeBtn.setText("Snooze 5m");
+    snoozeBtn.setText("Snooze " + snoozeMinutes + "m");
     snoozeBtn.setAllCaps(false);
     snoozeBtn.setTextColor(Color.parseColor("#F8FAFC"));
     snoozeBtn.setTextSize(15);

@@ -1,4 +1,4 @@
-import type { AlarmTone } from '../types/chrono';
+import type { AlarmTone, AlarmVibrationMode } from '../types/chrono';
 
 export type AlertSourceType = 'alarm' | 'reminder' | 'task';
 
@@ -10,6 +10,8 @@ export interface ActiveAlert {
   timeLabel: string;
   tone: AlarmTone;
   customRingtoneId?: string;
+  snoozeMinutes?: number;
+  vibrationMode?: AlarmVibrationMode;
 }
 
 export type NotificationPermissionState =
@@ -69,6 +71,7 @@ export async function showSystemAlertNotification(
 
   const title = `${TYPE_LABEL[alert.type]} · ${alert.timeLabel}`;
   const body = alert.name;
+  const snoozeMins = alert.snoozeMinutes && alert.snoozeMinutes > 0 ? alert.snoozeMinutes : 5;
 
   try {
     const reg =
@@ -89,14 +92,16 @@ export async function showSystemAlertNotification(
         tag: alert.uid,
         renotify: true,
         requireInteraction: true,
-        vibrate: [400, 200, 400, 200, 400],
+        ...(alert.vibrationMode === 'sound_only'
+          ? {}
+          : { vibrate: [400, 200, 400, 200, 400] }),
         data: {
           uid: alert.uid,
           alertType: alert.type,
           name: alert.name,
         },
         actions: [
-          { action: 'snooze', title: 'Snooze 5 min' },
+          { action: 'snooze', title: `Snooze ${snoozeMins} min` },
           { action: 'stop', title: 'Stop' },
         ],
       };

@@ -2,16 +2,23 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AlarmClock,
   BellRing,
+  Clock,
   FolderOpen,
   Music,
   Pencil,
   Plus,
+  Smartphone,
   Square,
   Trash2,
   Volume2,
   X,
 } from 'lucide-react';
-import type { AlarmTone, ChronoAlarm } from '../types/chrono';
+import {
+  ALARM_SNOOZE_PRESETS,
+  type AlarmTone,
+  type AlarmVibrationMode,
+  type ChronoAlarm,
+} from '../types/chrono';
 import { GlowingToggle } from './GlowingToggle';
 import { TemporalWheel } from './TemporalWheel';
 import { soundEngine } from '../utils/soundEngine';
@@ -49,6 +56,16 @@ const TONES: { id: Exclude<AlarmTone, 'custom'>; label: string }[] = [
   { id: 'pulse', label: 'Crisp Pulse' },
 ];
 
+const VIBRATION_MODES: {
+  id: AlarmVibrationMode;
+  label: string;
+  short: string;
+}[] = [
+  { id: 'sound_and_vibrate', label: 'Sound + Vibrate', short: 'Sound + Vib' },
+  { id: 'vibrate_only', label: 'Vibrate Only', short: 'Vibrate only' },
+  { id: 'sound_only', label: 'Sound Only', short: 'Sound only' },
+];
+
 function formatDaysSummary(days: number[]): string {
   if (days.length === 7) return 'Every day';
   if (days.length === 0) return 'Once';
@@ -80,6 +97,9 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
   const [customRingtoneName, setCustomRingtoneName] = useState<string | undefined>(
     undefined
   );
+  const [snoozeMinutes, setSnoozeMinutes] = useState<number>(5);
+  const [vibrationMode, setVibrationMode] =
+    useState<AlarmVibrationMode>('sound_and_vibrate');
 
   // OS Ringtone Library (stored persistently in IndexedDB)
   const [osRingtones, setOsRingtones] = useState<SavedRingtoneMeta[]>([]);
@@ -104,6 +124,8 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
     setTone(alarm.tone);
     setCustomRingtoneId(alarm.customRingtoneId);
     setCustomRingtoneName(alarm.customRingtoneName);
+    setSnoozeMinutes(alarm.snoozeMinutes ?? 5);
+    setVibrationMode(alarm.vibrationMode ?? 'sound_and_vibrate');
     setRingtoneError(null);
     setEditorOpen(true);
   };
@@ -118,6 +140,8 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
     setTone('dawn');
     setCustomRingtoneId(undefined);
     setCustomRingtoneName(undefined);
+    setSnoozeMinutes(5);
+    setVibrationMode('sound_and_vibrate');
     setRingtoneError(null);
     setEditorOpen(true);
   };
@@ -216,6 +240,8 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
         tone: useCustom ? 'custom' : tone === 'custom' ? 'dawn' : tone,
         customRingtoneId: useCustom ? customRingtoneId : undefined,
         customRingtoneName: useCustom ? customRingtoneName : undefined,
+        snoozeMinutes,
+        vibrationMode,
       },
       editingId ?? undefined
     );
@@ -452,6 +478,67 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
             </div>
           </div>
 
+          {/* Snooze Duration & Vibration Mode Presets */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-white/[0.06]">
+            <div>
+              <span className="flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-2">
+                <Clock className="h-3.5 w-3.5 text-indigo-600 dark:text-[#818CF8]" />
+                Snooze Preset
+              </span>
+              <div className="grid grid-cols-5 gap-1.5">
+                {ALARM_SNOOZE_PRESETS.map((mins) => {
+                  const active = snoozeMinutes === mins;
+                  return (
+                    <button
+                      key={mins}
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playTick(760, 0.015);
+                        setSnoozeMinutes(mins);
+                      }}
+                      className={`min-h-[40px] rounded-2xl font-mono text-xs font-semibold transition-all cursor-pointer ${
+                        active
+                          ? 'bg-[#6366F1] text-white shadow-[0_0_12px_rgba(99,102,241,0.35)]'
+                          : 'bg-slate-100 dark:bg-[#12141F] text-slate-600 dark:text-[#94A3B8] border border-slate-200 dark:border-white/[0.06]'
+                      }`}
+                    >
+                      {mins}m
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <span className="flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-[#94A3B8] mb-2">
+                <Smartphone className="h-3.5 w-3.5 text-amber-600 dark:text-[#F59E0B]" />
+                Vibration &amp; Ring Mode
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {VIBRATION_MODES.map((mode) => {
+                  const active = vibrationMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playTick(780, 0.015);
+                        setVibrationMode(mode.id);
+                      }}
+                      className={`min-h-[40px] rounded-2xl px-2 text-[11px] font-semibold transition-all cursor-pointer ${
+                        active
+                          ? 'bg-amber-50 dark:bg-[#F59E0B]/15 text-amber-700 dark:text-[#FCD34D] border border-amber-400 dark:border-[#F59E0B]/50'
+                          : 'bg-slate-100 dark:bg-[#12141F] text-slate-600 dark:text-[#94A3B8] border border-slate-200 dark:border-white/[0.06]'
+                      }`}
+                    >
+                      {mode.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2.5 pt-1">
             <button
               type="button"
@@ -491,9 +578,16 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
             ).padStart(2, '0')}`;
             const isSelected = editorOpen && editingId === alarm.id;
             const toneLabel =
-              alarm.tone === 'custom'
+              alarm.vibrationMode === 'vibrate_only'
+                ? 'Silent (Vibrate Only)'
+                : alarm.tone === 'custom'
                 ? alarm.customRingtoneName || 'OS Ringtone'
                 : (TONES.find((t) => t.id === alarm.tone)?.label ?? 'Dawn Chime');
+            const alarmSnooze = alarm.snoozeMinutes ?? 5;
+            const vibSummary =
+              VIBRATION_MODES.find(
+                (v) => v.id === (alarm.vibrationMode ?? 'sound_and_vibrate')
+              )?.short ?? 'Sound + Vib';
 
             return (
               <div
@@ -530,7 +624,7 @@ export const AlarmsSection: React.FC<AlarmsSectionProps> = ({
                     {alarm.label}
                   </p>
                   <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#94A3B8] select-text">
-                    {formatDaysSummary(alarm.days)} · {toneLabel}
+                    {formatDaysSummary(alarm.days)} · {toneLabel} · {alarmSnooze}m snooze · {vibSummary}
                   </p>
                 </div>
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   AlarmClock,
   ArrowRight,
@@ -14,19 +14,28 @@ import {
   Play,
   Plus,
   RotateCcw,
+  ShieldCheck,
   X,
 } from 'lucide-react';
 import {
   doesReminderOccurOnDate,
   formatDateToYMD,
+  formatTimeRange,
+  getTimeWindowFromHHMM,
+  getTimeWindowLabel,
   getTodayDateString,
+  hhmmToMinutes,
+  normalizeTaskCategory,
   parseYMDToLocalDate,
+  PRIORITY_META,
   type ChronoAlarm,
+  type FocusTimerState,
   type NavTab,
   type NoteItem,
   type PriorityLevel,
   type ReminderItem,
   type TaskItem,
+  type TimeWindowPreset,
 } from '../types/chrono';
 import { TactileCheckbox } from './TactileCheckbox';
 import { GlowingToggle } from './GlowingToggle';
@@ -40,6 +49,11 @@ interface DashboardSectionProps {
   reminders: ReminderItem[];
   alarms: ChronoAlarm[];
   notes: NoteItem[];
+  focusState: FocusTimerState;
+  onSelectFocusPreset: (minutes: number) => void;
+  onSelectFocusTask: (taskId: string | null) => void;
+  onToggleFocusRunning: () => void;
+  onResetFocus: () => void;
   onNavigate: (tab: NavTab) => void;
   onQuickAdd: (target: QuickAddTarget, defaultDate?: string) => void;
   onToggleTask: (id: string) => void;
@@ -47,11 +61,24 @@ interface DashboardSectionProps {
   onToggleAlarm: (id: string, enabled: boolean) => void;
 }
 
-const PRIORITY_TEXT: Record<PriorityLevel, { label: string; className: string }> = {
-  high: { label: 'High priority', className: 'text-amber-600 dark:text-[#F59E0B]' },
-  medium: { label: 'Medium', className: 'text-indigo-600 dark:text-[#818CF8]' },
-  low: { label: 'Low', className: 'text-slate-500 dark:text-[#94A3B8]' },
-};
+type TimelineFilter = 'all' | 'p1' | 'tasks' | 'reminders' | 'alarms';
+
+interface TimelineEntry {
+  uid: string;
+  kind: 'task' | 'reminder' | 'alarm';
+  sortMinutes: number;
+  timeDisplay: string;
+  window: TimeWindowPreset;
+  title: string;
+  subtitle?: string;
+  priority?: PriorityLevel;
+  categoryLabel: string;
+  completed?: boolean;
+  alarmEnabled?: boolean;
+  task?: TaskItem;
+  reminder?: ReminderItem;
+  alarm?: ChronoAlarm;
+}
 
 const WEEKDAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAY_SHORT_CODES = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -65,6 +92,11 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
   reminders,
   alarms,
   notes,
+  focusState,
+  onSelectFocusPreset,
+  onSelectFocusTask,
+  onToggleFocusRunning,
+  onResetFocus,
   onNavigate,
   onQuickAdd,
   onToggleTask,
@@ -82,29 +114,9 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
     month: todayLocal.getMonth(),
   }));
 
-  // Single + Quick Add Menu state
+  // Single + Quick Add Menu state & Time-Based Schedule Filter
   const [quickMenuOpen, setQuickMenuOpen] = useState(false);
-
-  // Compact Focus Timer widget right on Dashboard
-  const [focusPreset, setFocusPreset] = useState<number>(25);
-  const [secondsLeft, setSecondsLeft] = useState<number>(25 * 60);
-  const [running, setRunning] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (!running) return;
-    const id = window.setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          window.clearInterval(id);
-          setRunning(false);
-          soundEngine.playCompletionChime();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [running]);
+  const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('all');
 
   const selectedLocalDate = useMemo(
     () => parseYMDToLocalDate(selectedDate),
@@ -189,6 +201,106 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
     [notes]
   );
 
+  // Unified chronological Time-Based Agenda with Priorities
+  const timeBasedAgenda = useMemo(() => {
+    const priWeight: Record<PriorityLevel, number> = { high: 0, medium: 1, low: 2 };
+    const items: TimelineEntry[] = [];
+
+    dayTasks.forEach((task) => {
+      const p = task.priority ?? 'medium';
+      items.push({
+        uid: `task-${task.id}`,
+        kind: 'task',
+        sortMinutes: hhmmToMinutes(task.dueTime),
+        timeDisplay: formatTimeRange(task.dueTime, task.durationMinutes),
+        window: getTimeWindowFromHHMM(task.dueTime),
+        title: task.title,
+        subtitle: task.details,
+        priority: p,
+        categoryLabel: `Task · ${normalizeTaskCategory(task.category)} · ${task.durationMinutes}m`,
+        completed: task.completed,
+        task,
+      });
+    });
+
+    dayReminders.forEach((rem) => {
+      const p = rem.priority ?? 'medium';
+      items.push({
+        uid: `rem-${rem.id}`,
+        kind: 'reminder',
+        sortMinutes: hhmmToMinutes(rem.time),
+        timeDisplay: rem.time,
+        window: getTimeWindowFromHHMM(rem.time),
+        title: rem.title,
+        subtitle: rem.note,
+        priority: p,
+        categoryLabel: `Reminder · ${rem.repeat}`,
+        completed: rem.completed,
+        reminder: rem,
+      });
+    });
+
+    dayAlarms.forEach((alarm) => {
+      const hhmm = `${String(alarm.hour24).padStart(2, '0')}:${String(
+        alarm.minute
+      ).padStart(2, '0')}`;
+      const h12 = alarm.hour24 % 12 || 12;
+      const period = alarm.hour24 >= 12 ? 'PM' : 'AM';
+      items.push({
+        uid: `alarm-${alarm.id}`,
+        kind: 'alarm',
+        sortMinutes: alarm.hour24 * 60 + alarm.minute,
+        timeDisplay: `${String(h12).padStart(2, '0')}:${String(
+          alarm.minute
+        ).padStart(2, '0')} ${period}`,
+        window: getTimeWindowFromHHMM(hhmm),
+        title: alarm.label,
+        categoryLabel: 'Alarm',
+        alarmEnabled: alarm.enabled,
+        alarm,
+      });
+    });
+
+    const filtered = items.filter((item) => {
+      if (timelineFilter === 'p1') return item.priority === 'high';
+      if (timelineFilter === 'tasks') return item.kind === 'task';
+      if (timelineFilter === 'reminders') return item.kind === 'reminder';
+      if (timelineFilter === 'alarms') return item.kind === 'alarm';
+      return true;
+    });
+
+    return filtered.sort((a, b) => {
+      if (a.sortMinutes !== b.sortMinutes) return a.sortMinutes - b.sortMinutes;
+      const wa = a.priority ? priWeight[a.priority] : 3;
+      const wb = b.priority ? priWeight[b.priority] : 3;
+      return wa - wb;
+    });
+  }, [dayTasks, dayReminders, dayAlarms, timelineFilter]);
+
+  const groupedTimeline = useMemo(() => {
+    const order: TimeWindowPreset[] = ['morning', 'afternoon', 'evening'];
+    return order
+      .map((win) => ({
+        window: win,
+        label: getTimeWindowLabel(win),
+        range:
+          win === 'morning'
+            ? '00:00 – 11:59'
+            : win === 'afternoon'
+              ? '12:00 – 16:59'
+              : '17:00 – 23:59',
+        entries: timeBasedAgenda.filter((item) => item.window === win),
+      }))
+      .filter((g) => g.entries.length > 0);
+  }, [timeBasedAgenda]);
+
+  const criticalCountForDay = useMemo(
+    () =>
+      dayTasks.filter((t) => !t.completed && t.priority === 'high').length +
+      dayReminders.filter((r) => !r.completed && r.priority === 'high').length,
+    [dayTasks, dayReminders]
+  );
+
   // Calendar Month Grid calculation
   const calendarCells = useMemo(() => {
     const firstOfMonth = new Date(viewMonth.year, viewMonth.month, 1);
@@ -266,12 +378,19 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
     }
   };
 
-  const mins = Math.floor(secondsLeft / 60);
-  const secs = secondsLeft % 60;
-  const progress = Math.max(0, Math.min(1, secondsLeft / (focusPreset * 60)));
+  const mins = Math.floor(focusState.secondsLeft / 60);
+  const secs = focusState.secondsLeft % 60;
+  const progress = Math.max(
+    0,
+    Math.min(1, focusState.secondsLeft / (Math.max(1, focusState.presetMinutes) * 60))
+  );
   const r = 54;
   const circ = 2 * Math.PI * r;
   const dashOffset = circ * (1 - progress);
+  const pendingFocusTasks = useMemo(
+    () => tasks.filter((t) => !t.completed),
+    [tasks]
+  );
 
   return (
     <section className="relative flex flex-col gap-6">
@@ -307,16 +426,21 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
               '',
               `Tasks (${dayTasks.length}):`,
               ...(dayTasks.length > 0
-                ? dayTasks.map(
-                    (t) => `- [${t.completed ? 'x' : ' '}] ${t.dueTime} ${t.title}`
-                  )
+                ? dayTasks.map((t) => {
+                    const p = PRIORITY_META[t.priority ?? 'medium'].code;
+                    return `- [${t.completed ? 'x' : ' '}] ${formatTimeRange(
+                      t.dueTime,
+                      t.durationMinutes
+                    )} [${p} · ${normalizeTaskCategory(t.category)}] ${t.title}`;
+                  })
                 : ['- None']),
               '',
               `Reminders (${dayReminders.length}):`,
               ...(dayReminders.length > 0
-                ? dayReminders.map(
-                    (r) => `- [${r.completed ? 'x' : ' '}] ${r.time} ${r.title}`
-                  )
+                ? dayReminders.map((r) => {
+                    const p = PRIORITY_META[r.priority ?? 'medium'].code;
+                    return `- [${r.completed ? 'x' : ' '}] ${r.time} [${p}] ${r.title}`;
+                  })
                 : ['- None']),
               '',
               `Alarms (${activeAlarmsForDay.length} active):`,
@@ -648,160 +772,181 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
 
       {/* Main 2-Column Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Selected Day Tasks & Reminders */}
+        {/* Left Column: Chronological Time-Based Schedule with Priority */}
         <div className="lg:col-span-7 flex flex-col gap-6">
-          {/* Tasks for Selected Date */}
           <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/75 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 shadow-xs dark:shadow-none">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div>
                 <h3 className="text-base font-semibold text-slate-900 dark:text-[#F8FAFC]">
-                  Tasks · {selectedDayMeta.title}
+                  Time-Based Schedule · {selectedDayMeta.title}
                 </h3>
-                <p className="text-xs text-slate-600 dark:text-[#94A3B8] tabular-nums">
-                  {dayTasks.length} scheduled for {selectedDayMeta.title.toLowerCase()}
+                <p className="text-xs text-slate-600 dark:text-[#94A3B8] tabular-nums mt-0.5">
+                  {timeBasedAgenda.length} scheduled · {criticalCountForDay} P1 Critical open
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => onNavigate('tasks')}
-                className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 dark:text-[#818CF8] hover:opacity-80 transition-opacity cursor-pointer"
-              >
-                Manage Tasks
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
 
-            {dayTasks.length === 0 ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 py-3">
-                <p className="text-sm text-slate-500 dark:text-[#64748B]">
-                  No tasks scheduled for {selectedDayMeta.title}.
-                </p>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => onQuickAdd('tasks', selectedDate)}
-                  className="min-h-[38px] rounded-full bg-indigo-50 dark:bg-[#6366F1]/15 px-3.5 text-xs font-medium text-indigo-700 dark:text-[#818CF8] border border-indigo-200 dark:border-[#6366F1]/35 hover:opacity-85 transition-opacity cursor-pointer"
+                  onClick={() => onNavigate('tasks')}
+                  className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 dark:text-[#818CF8] hover:opacity-80 transition-opacity cursor-pointer"
                 >
-                  + Add Task
+                  All Tasks
+                  <ArrowRight className="h-3.5 w-3.5" />
                 </button>
               </div>
-            ) : (
-              <div className="divide-y divide-slate-200 dark:divide-white/[0.06]">
-                {dayTasks.map((task) => {
-                  const pInfo = PRIORITY_TEXT[task.priority ?? 'medium'];
-                  return (
-                    <div
-                      key={task.id}
-                      className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
-                    >
-                      <TactileCheckbox
-                        checked={task.completed}
-                        onChange={() => onToggleTask(task.id)}
-                        ariaLabel={`Complete ${task.title}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p
-                          className={`truncate text-sm font-medium ${
-                            task.completed
-                              ? 'line-through text-slate-400 dark:text-[#64748B]'
-                              : 'text-slate-900 dark:text-[#F8FAFC]'
-                          }`}
-                        >
-                          {task.title}
-                        </p>
-                        <p className="text-xs font-mono text-slate-500 dark:text-[#94A3B8] tabular-nums">
-                          {task.dueTime} · {task.durationMinutes}m ·{' '}
-                          <span className={`font-sans font-medium ${pInfo.className}`}>
-                            {pInfo.label}
-                          </span>
-                        </p>
-                        {task.details && !task.completed && (
-                          <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B]">
-                            {task.details}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Reminders for Selected Date */}
-          <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/75 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 shadow-xs dark:shadow-none">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900 dark:text-[#F8FAFC]">
-                  Reminders · {selectedDayMeta.title}
-                </h3>
-                <p className="text-xs text-slate-600 dark:text-[#94A3B8] tabular-nums">
-                  {pendingRemindersForDay} active alerts for{' '}
-                  {selectedDayMeta.title.toLowerCase()}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => onNavigate('reminders')}
-                className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-[#34D399] hover:opacity-80 transition-opacity cursor-pointer"
-              >
-                Manage Reminders
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
             </div>
 
-            {dayReminders.length === 0 ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 py-3">
-                <p className="text-sm text-slate-500 dark:text-[#64748B]">
-                  No reminders scheduled for {selectedDayMeta.title}.
-                </p>
+            {/* Schedule Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 mb-5">
+              {(
+                [
+                  { id: 'all', label: 'All' },
+                  { id: 'p1', label: 'P1 Critical' },
+                  { id: 'tasks', label: 'Tasks' },
+                  { id: 'reminders', label: 'Reminders' },
+                  { id: 'alarms', label: 'Alarms' },
+                ] as const
+              ).map((pill) => (
                 <button
+                  key={pill.id}
                   type="button"
-                  onClick={() => onQuickAdd('reminders', selectedDate)}
-                  className="min-h-[38px] rounded-full bg-emerald-50 dark:bg-[#10B981]/15 px-3.5 text-xs font-medium text-emerald-700 dark:text-[#34D399] border border-emerald-200 dark:border-[#10B981]/35 hover:opacity-85 transition-opacity cursor-pointer"
+                  onClick={() => {
+                    soundEngine.playTick(780, 0.015);
+                    setTimelineFilter(pill.id);
+                  }}
+                  className={`min-h-[32px] rounded-full px-3 text-xs font-medium border transition-colors cursor-pointer ${
+                    timelineFilter === pill.id
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-slate-50 dark:bg-[#12141F] text-slate-600 dark:text-[#94A3B8] border-slate-200 dark:border-white/[0.06] hover:text-slate-900 dark:hover:text-[#F8FAFC]'
+                  }`}
                 >
-                  + Add Reminder
+                  {pill.label}
                 </button>
+              ))}
+            </div>
+
+            {groupedTimeline.length === 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 py-4">
+                <p className="text-sm text-slate-500 dark:text-[#64748B]">
+                  No time blocks match this filter for {selectedDayMeta.title}.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onQuickAdd('tasks', selectedDate)}
+                    className="min-h-[38px] rounded-full bg-indigo-50 dark:bg-[#6366F1]/15 px-3.5 text-xs font-medium text-indigo-700 dark:text-[#818CF8] border border-indigo-200 dark:border-[#6366F1]/35 cursor-pointer"
+                  >
+                    + Add Task
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onQuickAdd('reminders', selectedDate)}
+                    className="min-h-[38px] rounded-full bg-emerald-50 dark:bg-[#10B981]/15 px-3.5 text-xs font-medium text-emerald-700 dark:text-[#34D399] border border-emerald-200 dark:border-[#10B981]/35 cursor-pointer"
+                  >
+                    + Add Reminder
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="divide-y divide-slate-200 dark:divide-white/[0.06]">
-                {dayReminders.map((rem) => {
-                  const pInfo = PRIORITY_TEXT[rem.priority ?? 'medium'];
-                  return (
-                    <div
-                      key={rem.id}
-                      className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
-                    >
-                      <TactileCheckbox
-                        checked={rem.completed}
-                        onChange={() => onToggleReminderDone(rem.id)}
-                        ariaLabel={`Complete reminder ${rem.title}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p
-                          className={`truncate text-sm font-medium ${
-                            rem.completed
-                              ? 'line-through text-slate-400 dark:text-[#64748B]'
-                              : 'text-slate-900 dark:text-[#F8FAFC]'
-                          }`}
-                        >
-                          {rem.title}
-                        </p>
-                        <p className="text-xs font-mono text-slate-500 dark:text-[#94A3B8] tabular-nums">
-                          {rem.time} ·{' '}
-                          <span className="capitalize font-sans">{rem.repeat}</span> ·{' '}
-                          <span className={`font-sans font-medium ${pInfo.className}`}>
-                            {pInfo.label}
-                          </span>
-                        </p>
-                        {rem.note && !rem.completed && (
-                          <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B]">
-                            {rem.note}
-                          </p>
-                        )}
-                      </div>
+              <div className="flex flex-col gap-5">
+                {groupedTimeline.map((group) => (
+                  <div key={group.window}>
+                    <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-slate-200 dark:border-white/[0.06]">
+                      <span className="text-xs font-semibold tracking-wide text-slate-800 dark:text-[#F8FAFC]">
+                        {group.label}
+                      </span>
+                      <span className="font-mono text-[11px] text-slate-500 dark:text-[#64748B] tabular-nums">
+                        {group.range}
+                      </span>
                     </div>
-                  );
-                })}
+
+                    <div className="divide-y divide-slate-200 dark:divide-white/[0.06]">
+                      {group.entries.map((entry) => {
+                        const pMeta = entry.priority
+                          ? PRIORITY_META[entry.priority]
+                          : null;
+
+                        return (
+                          <div
+                            key={entry.uid}
+                            className="flex items-start gap-3 py-3 first:pt-1 last:pb-0"
+                          >
+                            {entry.kind === 'task' && entry.task ? (
+                              <TactileCheckbox
+                                checked={Boolean(entry.completed)}
+                                onChange={() => onToggleTask(entry.task!.id)}
+                                ariaLabel={`Complete ${entry.title}`}
+                              />
+                            ) : entry.kind === 'reminder' && entry.reminder ? (
+                              <TactileCheckbox
+                                checked={Boolean(entry.completed)}
+                                onChange={() => onToggleReminderDone(entry.reminder!.id)}
+                                ariaLabel={`Complete reminder ${entry.title}`}
+                              />
+                            ) : (
+                              <div className="flex h-6 w-6 mt-0.5 shrink-0 items-center justify-center rounded-full bg-amber-50 dark:bg-[#F59E0B]/15 text-amber-600 dark:text-[#F59E0B]">
+                                <AlarmClock className="h-3.5 w-3.5" />
+                              </div>
+                            )}
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                                <span className="font-mono font-semibold text-slate-900 dark:text-[#F8FAFC] tabular-nums">
+                                  {entry.timeDisplay}
+                                </span>
+                                <span className="text-slate-400 dark:text-[#64748B]" aria-hidden="true">
+                                  ·
+                                </span>
+                                <span className="text-slate-500 dark:text-[#94A3B8]">
+                                  {entry.categoryLabel}
+                                </span>
+                                {pMeta && (
+                                  <>
+                                    <span className="text-slate-400 dark:text-[#64748B]" aria-hidden="true">
+                                      ·
+                                    </span>
+                                    <span className={`font-semibold ${pMeta.textClass}`}>
+                                      {pMeta.label}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+
+                              <p
+                                className={`mt-0.5 text-sm font-medium select-text ${
+                                  entry.completed
+                                    ? 'line-through text-slate-400 dark:text-[#64748B]'
+                                    : 'text-slate-900 dark:text-[#F8FAFC]'
+                                }`}
+                              >
+                                {entry.title}
+                              </p>
+
+                              {entry.subtitle && !entry.completed && (
+                                <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B] select-text">
+                                  {entry.subtitle}
+                                </p>
+                              )}
+                            </div>
+
+                            {entry.kind === 'alarm' && entry.alarm && (
+                              <div className="shrink-0">
+                                <GlowingToggle
+                                  checked={Boolean(entry.alarmEnabled)}
+                                  onChange={(next) =>
+                                    onToggleAlarm(entry.alarm!.id, next)
+                                  }
+                                  ariaLabel={`Toggle ${entry.title}`}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -809,24 +954,27 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
 
         {/* Right Column: Focus Timer, Alarms for Selected Day, Day & Recent Notes */}
         <div className="lg:col-span-5 flex flex-col gap-6">
-          <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/80 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 shadow-xs dark:shadow-none">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-slate-900 dark:text-[#F8FAFC]">
-                Focus Timer
-              </h3>
-              <div className="flex items-center gap-1.5">
-                {[15, 25, 45].map((m) => (
+          <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/80 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 shadow-xs dark:shadow-none flex flex-col gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                  Focus Timer
+                </h3>
+                {focusState.running && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-[#34D399]/15 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-[#34D399] border border-emerald-200 dark:border-[#34D399]/35">
+                    <ShieldCheck className="h-3 w-3" />
+                    {focusState.dndActive ? 'DND Active' : 'Focusing'}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                {[15, 25, 45, 60].map((m) => (
                   <button
                     key={m}
                     type="button"
-                    onClick={() => {
-                      soundEngine.playTick(800, 0.02);
-                      setRunning(false);
-                      setFocusPreset(m);
-                      setSecondsLeft(m * 60);
-                    }}
-                    className={`min-h-[32px] rounded-full px-3 text-xs font-medium tabular-nums transition-colors cursor-pointer ${
-                      focusPreset === m
+                    onClick={() => onSelectFocusPreset(m)}
+                    className={`min-h-[30px] rounded-full px-2.5 text-xs font-medium tabular-nums transition-colors cursor-pointer ${
+                      focusState.presetMinutes === m
                         ? 'bg-indigo-50 dark:bg-[#6366F1]/25 text-indigo-700 dark:text-[#c0c1ff] border border-indigo-300 dark:border-[#6366F1]/45'
                         : 'bg-slate-100 dark:bg-[#12141F] text-slate-600 dark:text-[#94A3B8] border border-slate-200 dark:border-white/[0.06]'
                     }`}
@@ -835,6 +983,25 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Optional Focus Task Selector */}
+            <div>
+              <select
+                aria-label="Focus session task"
+                value={focusState.linkedTaskId ?? ''}
+                onChange={(e) =>
+                  onSelectFocusTask(e.target.value ? e.target.value : null)
+                }
+                className="min-h-[38px] w-full rounded-2xl bg-slate-50 dark:bg-[#12141F] px-3 text-xs text-slate-700 dark:text-[#cbd5e1] border border-slate-200 dark:border-white/[0.06] focus:border-[#6366F1] focus:outline-none cursor-pointer"
+              >
+                <option value="">Free Focus Session (no linked task)</option>
+                {pendingFocusTasks.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    Focus on: {t.title} ({t.dueTime})
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="flex items-center justify-between gap-4">
@@ -853,7 +1020,7 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
                     cy="62"
                     r={r}
                     fill="none"
-                    stroke="#6366F1"
+                    stroke={focusState.running && focusState.dndActive ? '#10B981' : '#6366F1'}
                     strokeWidth="6"
                     strokeLinecap="round"
                     strokeDasharray={circ}
@@ -869,14 +1036,10 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
               <div className="flex flex-1 flex-col gap-2.5">
                 <button
                   type="button"
-                  onClick={() => {
-                    soundEngine.playTick(running ? 620 : 940, 0.03);
-                    if (secondsLeft === 0) setSecondsLeft(focusPreset * 60);
-                    setRunning((v) => !v);
-                  }}
+                  onClick={onToggleFocusRunning}
                   className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#6366F1] to-[#818CF8] text-xs font-semibold text-white shadow-[0_0_16px_rgba(99,102,241,0.35)] cursor-pointer"
                 >
-                  {running ? (
+                  {focusState.running ? (
                     <>
                       <Pause className="h-3.5 w-3.5 fill-current" />
                       Pause
@@ -884,17 +1047,16 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
                   ) : (
                     <>
                       <Play className="h-3.5 w-3.5 fill-current" />
-                      Start Focus
+                      {focusState.secondsLeft > 0 &&
+                      focusState.secondsLeft < focusState.presetMinutes * 60
+                        ? 'Resume Focus'
+                        : 'Start Focus'}
                     </>
                   )}
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    soundEngine.playTick(600, 0.02);
-                    setRunning(false);
-                    setSecondsLeft(focusPreset * 60);
-                  }}
+                  onClick={onResetFocus}
                   className="flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-full bg-slate-100 dark:bg-white/[0.05] text-xs font-medium text-slate-600 dark:text-[#94A3B8] hover:text-slate-900 dark:hover:text-[#F8FAFC] border border-slate-200 dark:border-white/10 cursor-pointer"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />

@@ -45,6 +45,8 @@ public class AlarmForegroundService extends Service {
   private String currentType = "alarm";
   private String currentName = "Kairo Alert";
   private String currentTime = "";
+  private int currentSnoozeMinutes = 5;
+  private String currentVibrationMode = "sound_and_vibrate";
 
   @Override
   public IBinder onBind(Intent intent) {
@@ -75,7 +77,7 @@ public class AlarmForegroundService extends Service {
     }
 
     if (ACTION_SNOOZE.equals(action)) {
-      long snoozeAtMs = scheduleSnooze5Min();
+      long snoozeAtMs = scheduleSnooze();
       AlarmScheduler.recordHandledAlert(
         this,
         currentSlotKey,
@@ -95,12 +97,16 @@ public class AlarmForegroundService extends Service {
     String type = intent.getStringExtra("alert_type");
     String name = intent.getStringExtra("alert_name");
     String time = intent.getStringExtra("alert_time");
+    int snoozeMins = intent.getIntExtra("snooze_minutes", 5);
+    String vibMode = intent.getStringExtra("vibration_mode");
 
     if (id != null && !id.isEmpty()) currentId = id;
     currentSlotKey = (slotKey != null && !slotKey.isEmpty()) ? slotKey : currentId;
     if (type != null && !type.isEmpty()) currentType = type;
     if (name != null && !name.isEmpty()) currentName = name;
     if (time != null) currentTime = time;
+    currentSnoozeMinutes = Math.max(1, snoozeMins);
+    currentVibrationMode = (vibMode != null && !vibMode.isEmpty()) ? vibMode : "sound_and_vibrate";
 
     isAlertActive = true;
     activeSlotKey = currentSlotKey;
@@ -120,8 +126,16 @@ public class AlarmForegroundService extends Service {
     Notification notification = buildUrgentNotification();
     startForeground(NOTIFICATION_ID, notification);
 
-    startAlarmAudio();
-    startAlarmVibration();
+    if (!"vibrate_only".equalsIgnoreCase(currentVibrationMode)) {
+      startAlarmAudio();
+    } else {
+      stopAlarmAudio();
+    }
+    if (!"sound_only".equalsIgnoreCase(currentVibrationMode)) {
+      startAlarmVibration();
+    } else {
+      stopAlarmVibration();
+    }
     launchLockScreenActivity();
 
     return START_STICKY;
@@ -148,6 +162,7 @@ public class AlarmForegroundService extends Service {
   private String formatTypeTitle() {
     if ("reminder".equalsIgnoreCase(currentType)) return "Reminder";
     if ("task".equalsIgnoreCase(currentType)) return "Task";
+    if ("focus".equalsIgnoreCase(currentType)) return "Focus Complete";
     return "Alarm";
   }
 
@@ -162,6 +177,7 @@ public class AlarmForegroundService extends Service {
     fullScreenIntent.putExtra("alert_type", currentType);
     fullScreenIntent.putExtra("alert_name", currentName);
     fullScreenIntent.putExtra("alert_time", currentTime);
+    fullScreenIntent.putExtra("snooze_minutes", currentSnoozeMinutes);
 
     PendingIntent fullScreenPi = PendingIntent.getActivity(
       this,
@@ -206,7 +222,7 @@ public class AlarmForegroundService extends Service {
       .setAutoCancel(false)
       .setContentIntent(fullScreenPi)
       .setFullScreenIntent(fullScreenPi, true)
-      .addAction(0, "Snooze 5m", snoozePi)
+      .addAction(0, "Snooze " + currentSnoozeMinutes + "m", snoozePi)
       .addAction(0, "Stop", stopPi)
       .build();
   }
@@ -223,6 +239,7 @@ public class AlarmForegroundService extends Service {
       popupIntent.putExtra("alert_type", currentType);
       popupIntent.putExtra("alert_name", currentName);
       popupIntent.putExtra("alert_time", currentTime);
+      popupIntent.putExtra("snooze_minutes", currentSnoozeMinutes);
       startActivity(popupIntent);
     } catch (Exception ignored) {}
   }
@@ -315,8 +332,8 @@ public class AlarmForegroundService extends Service {
     }
   }
 
-  private long scheduleSnooze5Min() {
-    long snoozeAtMs = System.currentTimeMillis() + 5 * 60 * 1000L;
+  private long scheduleSnooze() {
+    long snoozeAtMs = System.currentTimeMillis() + (long) currentSnoozeMinutes * 60L * 1000L;
     String nextTime = new SimpleDateFormat("hh:mm a", Locale.US).format(new Date(snoozeAtMs));
     String snoozeSlotKey = currentId + "-snooze-" + snoozeAtMs;
     int reqCode = Math.abs(snoozeSlotKey.hashCode());
@@ -328,7 +345,9 @@ public class AlarmForegroundService extends Service {
       currentType,
       currentName,
       nextTime,
-      snoozeAtMs
+      snoozeAtMs,
+      currentSnoozeMinutes,
+      currentVibrationMode
     );
     return snoozeAtMs;
   }

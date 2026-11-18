@@ -2,6 +2,7 @@ import {
   doesReminderOccurOnDate,
   formatDateToYMD,
   parseYMDToLocalDate,
+  type AlarmVibrationMode,
   type ChronoAlarm,
   type ReminderItem,
   type TaskItem,
@@ -15,6 +16,8 @@ export interface NativeScheduledAlert {
   name: string;
   triggerAtMs: number;
   timeLabel: string;
+  snoozeMinutes?: number;
+  vibrationMode?: AlarmVibrationMode;
 }
 
 export interface NativeHandledAlert {
@@ -35,6 +38,7 @@ export interface AndroidAlertPermissionsStatus {
   fullScreenIntent: boolean;
   overlayPermission: boolean;
   batteryOptimizationIgnored: boolean;
+  dndAccess: boolean;
 }
 
 interface KairoAlarmNativePlugin {
@@ -49,6 +53,15 @@ interface KairoAlarmNativePlugin {
   openOverlaySettings: () => Promise<void>;
   openBatterySettings: () => Promise<void>;
   openAppInfoSettings: () => Promise<void>;
+  openDndSettings?: () => Promise<void>;
+  setFocusDndState?: (opts: {
+    enabled: boolean;
+    enableDnd?: boolean;
+    allowAlarms?: boolean;
+    endsAtMs?: number;
+    focusLabel?: string;
+    timeLabel?: string;
+  }) => Promise<{ dndGranted: boolean; dndApplied: boolean }>;
   stopActiveAlert: (opts: { action: 'stop' | 'snooze' }) => Promise<void>;
   consumeHandledAlerts: () => Promise<{
     handledJson: string;
@@ -56,6 +69,18 @@ interface KairoAlarmNativePlugin {
     activeSlotKey?: string;
   }>;
   markAlertHandled: (opts: { slotKey: string }) => Promise<void>;
+  startVoiceDictation?: (opts?: { prompt?: string }) => Promise<{ text: string }>;
+  exportBackupFile?: (opts: {
+    fileName: string;
+    content: string;
+  }) => Promise<{ saved: boolean; location: string; fileName: string }>;
+  updateWidgetSummary?: (opts: {
+    tasksLeft: number;
+    remindersLeft: number;
+    nextAlarm: string;
+    nextTaskTitle: string;
+  }) => Promise<{ updated: boolean }>;
+  consumePendingQuickAdd?: () => Promise<{ target: string }>;
 }
 
 interface CapacitorGlobal {
@@ -122,6 +147,8 @@ export function computeUpcomingNativeAlerts(
         name: alarm.label || 'Kairo Alarm',
         triggerAtMs: candidate.getTime(),
         timeLabel: format12Hour(alarm.hour24, alarm.minute),
+        snoozeMinutes: alarm.snoozeMinutes ?? 5,
+        vibrationMode: alarm.vibrationMode ?? 'sound_and_vibrate',
       });
       break;
     }
@@ -189,6 +216,8 @@ export function computeUpcomingNativeAlerts(
       name: s.alert.name,
       triggerAtMs: s.triggerAtMs,
       timeLabel: format12Hour(d.getHours(), d.getMinutes()),
+      snoozeMinutes: s.alert.snoozeMinutes ?? 5,
+      vibrationMode: s.alert.vibrationMode ?? 'sound_and_vibrate',
     });
   }
 
@@ -253,11 +282,16 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       fullScreenIntent: false,
       overlayPermission: false,
       batteryOptimizationIgnored: false,
+      dndAccess: false,
     };
   }
   try {
     const status = await plugin.getPermissionStatus();
-    return { isNativeAndroid: true, ...status };
+    return {
+      isNativeAndroid: true,
+      ...status,
+      dndAccess: Boolean(status.dndAccess),
+    };
   } catch {
     return {
       isNativeAndroid: true,
@@ -266,6 +300,7 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       fullScreenIntent: false,
       overlayPermission: false,
       batteryOptimizationIgnored: false,
+      dndAccess: false,
     };
   }
 }
@@ -276,6 +311,7 @@ export type AndroidPermissionAction =
   | 'fullScreen'
   | 'overlay'
   | 'battery'
+  | 'dnd'
   | 'appInfo';
 
 export async function triggerAndroidPermissionSetting(
@@ -294,6 +330,8 @@ export async function triggerAndroidPermissionSetting(
       await plugin.openOverlaySettings();
     } else if (kind === 'battery') {
       await plugin.openBatterySettings();
+    } else if (kind === 'dnd') {
+      await plugin.openDndSettings?.();
     } else if (kind === 'appInfo') {
       await plugin.openAppInfoSettings?.();
     }
@@ -311,5 +349,117 @@ export async function notifyNativeServiceAction(
     await plugin.stopActiveAlert({ action });
   } catch {
     // Ignore
+  }
+}
+
+export async function startNativeVoiceDictation(
+  prompt = 'Speak your note...'
+): Promise<{ supported: boolean; text: string | null; error?: string }> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.startVoiceDictation) {
+    return { supported: false, text: null };
+  }
+  try {
+    const res = await plugin.startVoiceDictation({ prompt });
+    return { supported: true, text: res?.text ?? '' };
+  } catch (err) {
+    return {
+      supported: true,
+      text: null,
+      error: err instanceof Error ? err.message : 'Voice dictation canceled or unavailable.',
+    };
+  }
+}
+
+export async function setNativeFocusDndState(opts: {
+  enabled: boolean;
+  enableDnd?: boolean;
+  allowAlarms?: boolean;
+  endsAtMs?: number;
+  focusLabel?: string;
+  timeLabel?: string;
+}): Promise<{ dndGranted: boolean; dndApplied: boolean }> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.setFocusDndState) {
+    return { dndGranted: false, dndApplied: false };
+  }
+  try {
+    return await plugin.setFocusDndState(opts);
+  } catch {
+    return { dndGranted: false, dndApplied: false };
+  }
+}
+
+export async function saveNativeAndroidBackup(
+  fileName: string,
+  content: string
+): Promise<{
+  supported: boolean;
+  saved: boolean;
+  location: string;
+  error?: string;
+}> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.exportBackupFile) {
+    return { supported: false, saved: false, location: '' };
+  }
+  try {
+    const res = await plugin.exportBackupFile({ fileName, content });
+    return {
+      supported: true,
+      saved: Boolean(res?.saved),
+      location: res?.location ?? '',
+    };
+  } catch (err) {
+    return {
+      supported: true,
+      saved: false,
+      location: '',
+      error: err instanceof Error ? err.message : 'Unable to save backup file.',
+    };
+  }
+}
+
+export type NativeQuickAddTarget =
+  | 'dashboard'
+  | 'tasks'
+  | 'reminders'
+  | 'alarms'
+  | 'notes';
+
+export async function syncNativeWidgetSummary(summary: {
+  tasksLeft: number;
+  remindersLeft: number;
+  nextAlarm: string;
+  nextTaskTitle: string;
+}): Promise<boolean> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.updateWidgetSummary) return false;
+  try {
+    const res = await plugin.updateWidgetSummary(summary);
+    return Boolean(res?.updated);
+  } catch {
+    return false;
+  }
+}
+
+export async function consumeNativeQuickAddTarget(): Promise<NativeQuickAddTarget | null> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.consumePendingQuickAdd) return null;
+  try {
+    const res = await plugin.consumePendingQuickAdd();
+    const t = res?.target;
+    if (
+      t === 'dashboard' ||
+      t === 'tasks' ||
+      t === 'reminders' ||
+      t === 'alarms' ||
+      t === 'notes'
+    ) {
+      return t;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }

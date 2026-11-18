@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { AppLogo } from './components/AppLogo';
 import {
+  DEFAULT_NOTE_FOLDERS,
   DEFAULT_SETTINGS,
   doesReminderOccurOnDate,
   formatDateToYMD,
@@ -19,9 +20,11 @@ import {
   getInitialTasks,
   getTodayDateString,
   INITIAL_ALARMS,
+  normalizeTaskCategory,
   type AppFontFamily,
   type AppSettings,
   type ChronoAlarm,
+  type FocusTimerState,
   type NavTab,
   type NoteItem,
   type PriorityLevel,
@@ -34,6 +37,7 @@ import { RemindersSection } from './components/RemindersSection';
 import { AlarmsSection } from './components/AlarmsSection';
 import { NotesSection } from './components/NotesSection';
 import { SettingsSection } from './components/SettingsSection';
+import { WEB_AUTO_BACKUP_STORAGE_KEY } from './components/BackupSection';
 import { AlarmRingOverlay } from './components/AlarmRingOverlay';
 import { soundEngine } from './utils/soundEngine';
 import {
@@ -49,18 +53,28 @@ import {
 } from './utils/notificationEngine';
 import {
   computeUpcomingNativeAlerts,
+  consumeNativeQuickAddTarget,
   fetchNativeHandledAlerts,
   getAndroidAlertPermissions,
   isNativeAndroidPlatform,
   markNativeSlotHandled,
   notifyNativeServiceAction,
+  saveNativeAndroidBackup,
+  setNativeFocusDndState,
   syncNativeAndroidAlerts,
+  syncNativeWidgetSummary,
   triggerAndroidPermissionSetting,
   type AndroidAlertPermissionsStatus,
   type AndroidPermissionAction,
 } from './utils/nativeAndroidBridge';
-import { initAuth } from './utils/googleAuth';
-import type { ChronoBackupPayload } from './utils/googleDriveBackup';
+import { getAccessToken, initAuth } from './utils/googleAuth';
+import {
+  buildBackupPayload,
+  createDriveBackup,
+  listDriveBackups,
+  updateDriveBackup,
+  type ChronoBackupPayload,
+} from './utils/googleDriveBackup';
 
 const STORAGE_KEYS = {
   tasks: 'chrono_tempo_tasks_v2',
@@ -70,6 +84,7 @@ const STORAGE_KEYS = {
   settings: 'chrono_tempo_settings_v1',
   snoozed: 'kairo_snoozed_alerts_v1',
   firedKeys: 'kairo_fired_keys_v1',
+  focusState: 'kairo_focus_state_v1',
 };
 
 function loadRecentFiredKeys(): Set<string> {
@@ -176,15 +191,23 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [now, setNow] = useState<Date>(() => new Date());
 
-  const [settings, setSettings] = useState<AppSettings>(() => ({
-    ...DEFAULT_SETTINGS,
-    ...loadStored(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS),
-  }));
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const stored = loadStored(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS);
+    return {
+      ...DEFAULT_SETTINGS,
+      ...stored,
+      noteFolders:
+        Array.isArray(stored.noteFolders) && stored.noteFolders.length > 0
+          ? stored.noteFolders
+          : [...DEFAULT_NOTE_FOLDERS],
+    };
+  });
 
   const [tasks, setTasks] = useState<TaskItem[]>(() =>
     loadStored(STORAGE_KEYS.tasks, getInitialTasks).map((t) => ({
       ...t,
       priority: normalizePriority(t.priority),
+      category: normalizeTaskCategory(t.category),
     }))
   );
   const [reminders, setReminders] = useState<ReminderItem[]>(() =>
@@ -224,11 +247,35 @@ export default function App() {
       fullScreenIntent: false,
       overlayPermission: false,
       batteryOptimizationIgnored: false,
+      dndAccess: false,
     });
+
+  const [focusState, setFocusState] = useState<FocusTimerState>(() => {
+    const fallback: FocusTimerState = {
+      presetMinutes: 25,
+      secondsLeft: 25 * 60,
+      running: false,
+      endAtMs: null,
+      linkedTaskId: null,
+      dndActive: false,
+    };
+    const stored = loadStored<FocusTimerState>(STORAGE_KEYS.focusState, () => fallback);
+    if (stored.running && stored.endAtMs) {
+      const rem = Math.max(0, Math.ceil((stored.endAtMs - Date.now()) / 1000));
+      if (rem > 0) {
+        return { ...stored, secondsLeft: rem };
+      }
+      return { ...stored, running: false, endAtMs: null, secondsLeft: 0, dndActive: false };
+    }
+    return { ...fallback, ...stored, running: false, endAtMs: null, dndActive: false };
+  });
 
   const sessionStartMsRef = useRef<number>(Date.now());
   const firedKeysRef = useRef<Set<string>>(loadRecentFiredKeys());
   const nativeSyncedOnceRef = useRef<boolean>(!isNativeAndroidPlatform());
+  const alarmsRef = useRef<ChronoAlarm[]>(alarms);
+  alarmsRef.current = alarms;
+  const autoBackupInFlightRef = useRef<boolean>(false);
 
   // Google Account auth state (token cached strictly in memory)
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -309,6 +356,14 @@ export default function App() {
     }
   }, [snoozedAlerts]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.focusState, JSON.stringify(focusState));
+    } catch {
+      // Ignore
+    }
+  }, [focusState]);
+
   // Register Service Worker for interactive OS notifications
   useEffect(() => {
     if (notificationPermission === 'granted') {
@@ -318,20 +373,29 @@ export default function App() {
 
   const activeAlert = alertQueue[0] ?? null;
 
-  // Keep sound loop + vibration synced with the frontmost active alert
+  // Keep sound loop + vibration synced with the frontmost active alert & its vibrationMode
   useEffect(() => {
     if (!activeAlert) {
       soundEngine.stopAlarmLoop();
       stopAlertVibration();
       return;
     }
-    soundEngine.startAlarmLoop(
-      activeAlert.tone,
-      activeAlert.customRingtoneId,
-      settings.gradualAlarmVolume
-    );
-    startAlertVibration();
-  }, [activeAlert?.uid, settings.gradualAlarmVolume]);
+    const mode = activeAlert.vibrationMode ?? 'sound_and_vibrate';
+    if (mode !== 'vibrate_only') {
+      soundEngine.startAlarmLoop(
+        activeAlert.tone,
+        activeAlert.customRingtoneId,
+        settings.gradualAlarmVolume
+      );
+    } else {
+      soundEngine.stopAlarmLoop();
+    }
+    if (mode !== 'sound_only') {
+      startAlertVibration();
+    } else {
+      stopAlertVibration();
+    }
+  }, [activeAlert?.uid, activeAlert?.vibrationMode, settings.gradualAlarmVolume]);
 
   const enqueueAlerts = useCallback((incoming: ActiveAlert[]) => {
     if (incoming.length === 0) return;
@@ -376,6 +440,10 @@ export default function App() {
         const snoozeDate = new Date(item.snoozeUntilMs);
         const typeSafe =
           item.type === 'reminder' || item.type === 'task' ? item.type : 'alarm';
+        const matchedAlarm =
+          typeSafe === 'alarm'
+            ? alarmsRef.current.find((a) => a.id === item.id)
+            : undefined;
         nativeSnoozes.push({
           alert: {
             uid: `${item.id}-snooze-${item.snoozeUntilMs}`,
@@ -386,7 +454,10 @@ export default function App() {
               snoozeDate.getHours(),
               snoozeDate.getMinutes()
             ),
-            tone: 'dawn',
+            tone: matchedAlarm?.tone ?? 'dawn',
+            customRingtoneId: matchedAlarm?.customRingtoneId,
+            snoozeMinutes: matchedAlarm?.snoozeMinutes ?? 5,
+            vibrationMode: matchedAlarm?.vibrationMode ?? 'sound_and_vibrate',
           },
           triggerAtMs: item.snoozeUntilMs,
         });
@@ -509,46 +580,53 @@ export default function App() {
           timeLabel: format12HourTime(a.hour24, a.minute),
           tone: a.tone,
           customRingtoneId: a.customRingtoneId,
+          snoozeMinutes: a.snoozeMinutes ?? 5,
+          vibrationMode: a.vibrationMode ?? 'sound_and_vibrate',
         });
       }
     });
 
-    // 2. Reminders
-    reminders.forEach((r) => {
-      if (!r.active || r.completed) return;
-      if (!doesReminderOccurOnDate(r, todayStr)) return;
-      const parsed = parseHHMM(r.time);
-      if (!parsed) return;
-      const key = `reminder:${r.id}:${todayStr}:${r.time}`;
-      if (isDueInWindow(parsed.hour24, parsed.minute, key)) {
-        dueAlerts.push({
-          uid: key,
-          sourceId: r.id,
-          type: 'reminder',
-          name: r.title,
-          timeLabel: format12HourTime(parsed.hour24, parsed.minute),
-          tone: 'zenith',
-        });
-      }
-    });
+    const suppressNonAlarmInFocus =
+      focusState.running && settings.focusMuteInAppAlerts;
 
-    // 3. Tasks
-    tasks.forEach((t) => {
-      if (t.completed || t.dueDate !== todayStr) return;
-      const parsed = parseHHMM(t.dueTime);
-      if (!parsed) return;
-      const key = `task:${t.id}:${todayStr}:${t.dueTime}`;
-      if (isDueInWindow(parsed.hour24, parsed.minute, key)) {
-        dueAlerts.push({
-          uid: key,
-          sourceId: t.id,
-          type: 'task',
-          name: t.title,
-          timeLabel: format12HourTime(parsed.hour24, parsed.minute),
-          tone: 'dawn',
-        });
-      }
-    });
+    // 2. Reminders (deferred when Focus Quiet Shield is enabled)
+    if (!suppressNonAlarmInFocus) {
+      reminders.forEach((r) => {
+        if (!r.active || r.completed) return;
+        if (!doesReminderOccurOnDate(r, todayStr)) return;
+        const parsed = parseHHMM(r.time);
+        if (!parsed) return;
+        const key = `reminder:${r.id}:${todayStr}:${r.time}`;
+        if (isDueInWindow(parsed.hour24, parsed.minute, key)) {
+          dueAlerts.push({
+            uid: key,
+            sourceId: r.id,
+            type: 'reminder',
+            name: r.title,
+            timeLabel: format12HourTime(parsed.hour24, parsed.minute),
+            tone: 'zenith',
+          });
+        }
+      });
+
+      // 3. Tasks (deferred when Focus Quiet Shield is enabled)
+      tasks.forEach((t) => {
+        if (t.completed || t.dueDate !== todayStr) return;
+        const parsed = parseHHMM(t.dueTime);
+        if (!parsed) return;
+        const key = `task:${t.id}:${todayStr}:${t.dueTime}`;
+        if (isDueInWindow(parsed.hour24, parsed.minute, key)) {
+          dueAlerts.push({
+            uid: key,
+            sourceId: t.id,
+            type: 'task',
+            name: t.title,
+            timeLabel: format12HourTime(parsed.hour24, parsed.minute),
+            tone: 'dawn',
+          });
+        }
+      });
+    }
 
     // 4. Snoozed Alerts (for Alarms, Reminders, and Tasks)
     const dueSnoozes = snoozedAlerts.filter(
@@ -589,7 +667,16 @@ export default function App() {
         enqueueAlerts(dueAlerts);
       }
     }
-  }, [alarms, reminders, tasks, snoozedAlerts, enqueueAlerts, syncHandledFromNative]);
+  }, [
+    alarms,
+    reminders,
+    tasks,
+    snoozedAlerts,
+    focusState.running,
+    settings.focusMuteInAppAlerts,
+    enqueueAlerts,
+    syncHandledFromNative,
+  ]);
 
   useEffect(() => {
     const id = window.setInterval(evaluateDueAlerts, 1000);
@@ -609,7 +696,164 @@ export default function App() {
     };
   }, [evaluateDueAlerts, syncHandledFromNative]);
 
-  // Quick Add handler from Dashboard '+' button
+  // Timestamp-accurate Focus Timer tick + automatic Android DND restore on finish
+  useEffect(() => {
+    if (!focusState.running || !focusState.endAtMs) return;
+
+    const completeFocusSession = (completedEndMs: number) => {
+      void markNativeSlotHandled(`focus-${completedEndMs}`);
+      void setNativeFocusDndState({ enabled: false });
+      soundEngine.playCompletionChime();
+      setFocusState((prev) => ({
+        ...prev,
+        running: false,
+        endAtMs: null,
+        secondsLeft: 0,
+        dndActive: false,
+      }));
+    };
+
+    const syncRemaining = () => {
+      if (!focusState.endAtMs) return;
+      const rem = Math.max(0, Math.ceil((focusState.endAtMs - Date.now()) / 1000));
+      if (rem <= 0) {
+        completeFocusSession(focusState.endAtMs);
+      } else {
+        setFocusState((prev) =>
+          prev.secondsLeft === rem ? prev : { ...prev, secondsLeft: rem }
+        );
+      }
+    };
+
+    syncRemaining();
+    const id = window.setInterval(syncRemaining, 1000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') syncRemaining();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [focusState.running, focusState.endAtMs]);
+
+  const handleSelectFocusPreset = useCallback((minutes: number) => {
+    soundEngine.playTick(800, 0.02);
+    void setNativeFocusDndState({ enabled: false });
+    setFocusState((prev) => ({
+      ...prev,
+      presetMinutes: minutes,
+      secondsLeft: minutes * 60,
+      running: false,
+      endAtMs: null,
+      dndActive: false,
+    }));
+  }, []);
+
+  const handleSelectFocusTask = useCallback((taskId: string | null) => {
+    setFocusState((prev) => ({ ...prev, linkedTaskId: taskId }));
+  }, []);
+
+  const handleResetFocus = useCallback(() => {
+    soundEngine.playTick(600, 0.02);
+    void setNativeFocusDndState({ enabled: false });
+    setFocusState((prev) => ({
+      ...prev,
+      running: false,
+      endAtMs: null,
+      secondsLeft: prev.presetMinutes * 60,
+      dndActive: false,
+    }));
+  }, []);
+
+  const handleToggleFocusRunning = useCallback(() => {
+    if (focusState.running) {
+      soundEngine.playTick(620, 0.03);
+      const rem = focusState.endAtMs
+        ? Math.max(1, Math.ceil((focusState.endAtMs - Date.now()) / 1000))
+        : focusState.secondsLeft;
+      void setNativeFocusDndState({ enabled: false });
+      setFocusState((prev) => ({
+        ...prev,
+        running: false,
+        endAtMs: null,
+        secondsLeft: rem,
+        dndActive: false,
+      }));
+      return;
+    }
+
+    soundEngine.playTick(940, 0.03);
+    const durationSec =
+      focusState.secondsLeft > 0
+        ? focusState.secondsLeft
+        : focusState.presetMinutes * 60;
+    const endAtMs = Date.now() + durationSec * 1000;
+    const endDate = new Date(endAtMs);
+    const linkedTitle = tasks.find((t) => t.id === focusState.linkedTaskId)?.title;
+    const focusLabel = linkedTitle
+      ? `Focus Complete: ${linkedTitle}`
+      : 'Focus Session Complete';
+
+    setFocusState((prev) => ({
+      ...prev,
+      secondsLeft: durationSec,
+      running: true,
+      endAtMs,
+    }));
+
+    void setNativeFocusDndState({
+      enabled: true,
+      enableDnd: settings.focusAutoDnd,
+      allowAlarms: true,
+      endsAtMs: endAtMs,
+      focusLabel,
+      timeLabel: format12HourTime(endDate.getHours(), endDate.getMinutes()),
+    }).then((res) => {
+      setFocusState((prev) =>
+        prev.running ? { ...prev, dndActive: res.dndApplied } : prev
+      );
+    });
+  }, [
+    focusState.running,
+    focusState.endAtMs,
+    focusState.secondsLeft,
+    focusState.presetMinutes,
+    focusState.linkedTaskId,
+    tasks,
+    settings.focusAutoDnd,
+  ]);
+
+  // Sync Settings focusAutoDnd toggle immediately if toggled while a Focus session is active
+  useEffect(() => {
+    if (!focusState.running || !focusState.endAtMs) return;
+    const endDate = new Date(focusState.endAtMs);
+    const linkedTitle = tasks.find((t) => t.id === focusState.linkedTaskId)?.title;
+    void setNativeFocusDndState({
+      enabled: true,
+      enableDnd: settings.focusAutoDnd,
+      allowAlarms: true,
+      endsAtMs: focusState.endAtMs,
+      focusLabel: linkedTitle
+        ? `Focus Complete: ${linkedTitle}`
+        : 'Focus Session Complete',
+      timeLabel: format12HourTime(endDate.getHours(), endDate.getMinutes()),
+    }).then((res) => {
+      setFocusState((prev) =>
+        prev.running && prev.dndActive !== res.dndApplied
+          ? { ...prev, dndActive: res.dndApplied }
+          : prev
+      );
+    });
+  }, [
+    settings.focusAutoDnd,
+    focusState.running,
+    focusState.endAtMs,
+    focusState.linkedTaskId,
+    tasks,
+  ]);
+
+  // Quick Add handler from Dashboard '+' button or Android Home Widget
   const handleQuickAdd = useCallback(
     (target: QuickAddTarget, defaultDate?: string) => {
       soundEngine.playTick(880, 0.025);
@@ -620,7 +864,58 @@ export default function App() {
     []
   );
 
-  // Task CRUD handlers
+  // Consume Android Home Screen Widget Quick-Add launch intent on mount & foreground wake
+  const checkPendingNativeQuickAdd = useCallback(async () => {
+    const target = await consumeNativeQuickAddTarget();
+    if (!target) return;
+    if (target === 'dashboard') {
+      setActiveTab('dashboard');
+      return;
+    }
+    handleQuickAdd(target, getTodayDateString());
+  }, [handleQuickAdd]);
+
+  useEffect(() => {
+    void checkPendingNativeQuickAdd();
+    const onWakeQuickAdd = () => {
+      if (document.visibilityState === 'visible') {
+        void checkPendingNativeQuickAdd();
+      }
+    };
+    document.addEventListener('visibilitychange', onWakeQuickAdd);
+    window.addEventListener('focus', checkPendingNativeQuickAdd);
+    return () => {
+      document.removeEventListener('visibilitychange', onWakeQuickAdd);
+      window.removeEventListener('focus', checkPendingNativeQuickAdd);
+    };
+  }, [checkPendingNativeQuickAdd]);
+
+  // Task CRUD handlers & Auto-Carryover for Missed Tasks
+  const carryOverMissedTasks = useCallback(() => {
+    const todayStr = getTodayDateString();
+    setTasks((prev) => {
+      let changed = false;
+      const updated = prev.map((t) => {
+        if (!t.completed && t.dueDate < todayStr) {
+          changed = true;
+          return {
+            ...t,
+            dueDate: todayStr,
+            carriedOverFrom: t.carriedOverFrom ?? t.dueDate,
+          };
+        }
+        return t;
+      });
+      return changed ? updated : prev;
+    });
+  }, []);
+
+  const currentDayKey = formatDateToYMD(now);
+  useEffect(() => {
+    if (!settings.autoCarryoverTasks) return;
+    carryOverMissedTasks();
+  }, [settings.autoCarryoverTasks, currentDayKey, carryOverMissedTasks]);
+
   const handleToggleTask = useCallback((id: string) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t))
@@ -640,7 +935,15 @@ export default function App() {
   const handleUpdateTask = useCallback(
     (id: string, updates: Omit<TaskItem, 'id'>) => {
       setTasks((prev) =>
-        prev.map((t) => (t.id === id ? { ...updates, id } : t))
+        prev.map((t) => {
+          if (t.id !== id) return t;
+          const dateEdited = updates.dueDate !== t.dueDate;
+          return {
+            ...updates,
+            id,
+            carriedOverFrom: dateEdited ? undefined : t.carriedOverFrom,
+          };
+        })
       );
     },
     []
@@ -721,6 +1024,8 @@ export default function App() {
           timeLabel: format12HourTime(alarm.hour24, alarm.minute),
           tone: alarm.tone,
           customRingtoneId: alarm.customRingtoneId,
+          snoozeMinutes: alarm.snoozeMinutes ?? 5,
+          vibrationMode: alarm.vibrationMode ?? 'sound_and_vibrate',
         },
       ]);
     },
@@ -753,7 +1058,8 @@ export default function App() {
 
       void notifyNativeServiceAction('snooze');
       void closeSystemAlertNotification(target.uid);
-      const triggerAtMs = Date.now() + 5 * 60 * 1000;
+      const snoozeMins = target.snoozeMinutes ?? 5;
+      const triggerAtMs = Date.now() + snoozeMins * 60 * 1000;
       const snoozeDate = new Date(triggerAtMs);
       setSnoozedAlerts((prev) => [
         ...prev,
@@ -868,6 +1174,7 @@ export default function App() {
       payload.data.tasks.map((t) => ({
         ...t,
         priority: normalizePriority(t.priority),
+        category: normalizeTaskCategory(t.category),
       }))
     );
     setReminders(
@@ -878,7 +1185,123 @@ export default function App() {
     );
     setAlarms(payload.data.alarms);
     setNotes(payload.data.notes);
+    const restoredFolders = Array.from(
+      new Set(
+        payload.data.notes
+          .map((n) => n.category)
+          .filter((c): c is string => Boolean(c && c.trim()))
+      )
+    );
+    if (restoredFolders.length > 0) {
+      setSettings((prev) => ({
+        ...prev,
+        noteFolders: Array.from(
+          new Set([
+            ...(prev.noteFolders ?? [...DEFAULT_NOTE_FOLDERS]),
+            ...restoredFolders,
+          ])
+        ),
+      }));
+    }
   }, []);
+
+  // Scheduled Auto-Backup runner
+  const runAutoBackup = useCallback(
+    async (manual = false) => {
+      if (autoBackupInFlightRef.current) return;
+      autoBackupInFlightRef.current = true;
+      try {
+        const payload = buildBackupPayload({ tasks, reminders, alarms, notes });
+        const serialized = JSON.stringify(payload, null, 2);
+        const dest = settings.autoBackupDestination;
+        const statusParts: string[] = [];
+
+        if (dest === 'local' || dest === 'both') {
+          if (isNativeAndroidPlatform()) {
+            const autoFileName = `kairo-auto-backup-${getTodayDateString()}.json`;
+            const nativeRes = await saveNativeAndroidBackup(autoFileName, serialized);
+            if (nativeRes.saved) {
+              statusParts.push(`Saved to ${nativeRes.location}`);
+            } else {
+              statusParts.push(nativeRes.error ?? 'Local save failed');
+            }
+          } else {
+            try {
+              localStorage.setItem(WEB_AUTO_BACKUP_STORAGE_KEY, serialized);
+              statusParts.push('Saved snapshot in browser storage');
+            } catch {
+              statusParts.push('Browser storage full');
+            }
+          }
+        }
+
+        if (dest === 'drive' || dest === 'both') {
+          const token = getAccessToken();
+          if (!token) {
+            if (manual) {
+              throw new Error(
+                'Google Drive is not signed in. Sign in with Google first or switch destination to Local.'
+              );
+            }
+            statusParts.push('Google Drive skipped (sign in needed)');
+          } else {
+            const existing = await listDriveBackups(token);
+            const autoFile = existing.find((f) => f.name === 'kairo-auto-backup.json');
+            if (autoFile) {
+              await updateDriveBackup(token, autoFile.id, payload);
+              statusParts.push('Updated kairo-auto-backup.json in Google Drive');
+            } else {
+              await createDriveBackup(token, 'kairo-auto-backup.json', payload);
+              statusParts.push('Created kairo-auto-backup.json in Google Drive');
+            }
+          }
+        }
+
+        const nowIso = new Date().toISOString();
+        setSettings((prev) => ({
+          ...prev,
+          lastAutoBackupAt: nowIso,
+          lastAutoBackupStatus: statusParts.join(' · ') || 'Completed',
+        }));
+      } finally {
+        autoBackupInFlightRef.current = false;
+      }
+    },
+    [tasks, reminders, alarms, notes, settings.autoBackupDestination]
+  );
+
+  useEffect(() => {
+    if (!settings.autoBackupEnabled) return;
+
+    const checkSchedule = () => {
+      const intervalMs =
+        settings.autoBackupFrequency === 'weekly'
+          ? 7 * 24 * 60 * 60 * 1000
+          : 24 * 60 * 60 * 1000;
+      const lastMs = settings.lastAutoBackupAt
+        ? new Date(settings.lastAutoBackupAt).getTime()
+        : 0;
+      if (!lastMs || Number.isNaN(lastMs) || Date.now() - lastMs >= intervalMs) {
+        void runAutoBackup(false);
+      }
+    };
+
+    checkSchedule();
+    const timer = window.setInterval(checkSchedule, 15 * 60 * 1000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') checkSchedule();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [
+    settings.autoBackupEnabled,
+    settings.autoBackupFrequency,
+    settings.lastAutoBackupAt,
+    runAutoBackup,
+  ]);
 
   // Derived clock & summary
   const clockDisplay = useMemo(() => {
@@ -939,9 +1362,32 @@ export default function App() {
   ];
 
   const today = getTodayDateString();
-  const todayTasksRemaining = tasks.filter(
-    (t) => t.dueDate === today && !t.completed
+  const todayPendingTasks = tasks
+    .filter((t) => t.dueDate === today && !t.completed)
+    .sort((a, b) => a.dueTime.localeCompare(b.dueTime));
+  const todayTasksRemaining = todayPendingTasks.length;
+  const todayRemindersRemaining = reminders.filter(
+    (r) => r.active && !r.completed && doesReminderOccurOnDate(r, today)
   ).length;
+  const nextPendingTaskTitle = todayPendingTasks[0]?.title ?? 'All caught up today';
+
+  const syncWidgetNow = useCallback(() => {
+    void syncNativeWidgetSummary({
+      tasksLeft: todayTasksRemaining,
+      remindersLeft: todayRemindersRemaining,
+      nextAlarm: nextAlarmLabel,
+      nextTaskTitle: nextPendingTaskTitle,
+    });
+  }, [
+    todayTasksRemaining,
+    todayRemindersRemaining,
+    nextAlarmLabel,
+    nextPendingTaskTitle,
+  ]);
+
+  useEffect(() => {
+    syncWidgetNow();
+  }, [syncWidgetNow]);
 
   return (
     <div className="min-h-screen bg-[#F4F6FB] dark:bg-[#090A0F] text-slate-900 dark:text-[#F8FAFC] flex flex-col lg:flex-row transition-colors duration-200">
@@ -1009,6 +1455,21 @@ export default function App() {
 
         {/* Quiet Temporal Summary */}
         <div className="pt-5 mt-4 border-t border-slate-200 dark:border-white/[0.06] flex flex-col gap-2.5 text-xs">
+          {focusState.running && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('dashboard')}
+              className="flex items-center justify-between rounded-xl bg-emerald-50 dark:bg-[#34D399]/12 border border-emerald-200 dark:border-[#34D399]/30 px-3 py-2 text-left cursor-pointer"
+            >
+              <span className="font-medium text-emerald-700 dark:text-[#34D399]">
+                {focusState.dndActive ? 'Focus · DND ON' : 'Focus Active'}
+              </span>
+              <span className="font-mono font-semibold text-emerald-700 dark:text-[#34D399] tabular-nums">
+                {String(Math.floor(focusState.secondsLeft / 60)).padStart(2, '0')}:
+                {String(focusState.secondsLeft % 60).padStart(2, '0')}
+              </span>
+            </button>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-slate-500 dark:text-[#64748B]">Next alarm</span>
             <span className="font-mono font-medium text-amber-600 dark:text-[#F59E0B] tabular-nums">
@@ -1134,6 +1595,11 @@ export default function App() {
               reminders={reminders}
               alarms={alarms}
               notes={notes}
+              focusState={focusState}
+              onSelectFocusPreset={handleSelectFocusPreset}
+              onSelectFocusTask={handleSelectFocusTask}
+              onToggleFocusRunning={handleToggleFocusRunning}
+              onResetFocus={handleResetFocus}
               onNavigate={setActiveTab}
               onQuickAdd={handleQuickAdd}
               onToggleTask={handleToggleTask}
@@ -1147,6 +1613,11 @@ export default function App() {
               tasks={tasks}
               autoOpenCreateKey={createTriggers.tasks}
               defaultCreateDate={quickAddDate}
+              autoCarryoverEnabled={settings.autoCarryoverTasks}
+              onToggleAutoCarryover={(enabled) =>
+                setSettings((prev) => ({ ...prev, autoCarryoverTasks: enabled }))
+              }
+              onCarryOverOverdue={carryOverMissedTasks}
               onToggleTask={handleToggleTask}
               onCreateTask={handleCreateTask}
               onUpdateTask={handleUpdateTask}
@@ -1181,11 +1652,17 @@ export default function App() {
           {activeTab === 'notes' && (
             <NotesSection
               notes={notes}
+              folders={settings.noteFolders ?? [...DEFAULT_NOTE_FOLDERS]}
+              onUpdateFolders={(next) =>
+                setSettings((prev) => ({ ...prev, noteFolders: next }))
+              }
               autoOpenCreateKey={createTriggers.notes}
               onCreateNote={handleCreateNote}
               onUpdateNote={handleUpdateNote}
               onDeleteNote={handleDeleteNote}
               onTogglePin={handleToggleNotePin}
+              onCreateTaskFromNote={handleCreateTask}
+              onCreateReminderFromNote={handleCreateReminder}
             />
           )}
 
@@ -1204,6 +1681,8 @@ export default function App() {
               alarms={alarms}
               notes={notes}
               onRestoreBackup={handleRestoreBackup}
+              onRunAutoBackupNow={() => runAutoBackup(true)}
+              onRefreshWidget={syncWidgetNow}
               notificationPermission={notificationPermission}
               onRequestNotificationPermission={() => {
                 void handleRequestNotificationPermission();
