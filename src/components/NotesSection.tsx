@@ -591,6 +591,155 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
     }
   };
 
+  const parseListLinePrefix = (
+    line: string
+  ):
+    | {
+        kind: 'checklist' | 'numbered' | 'bullet';
+        nextPrefix: string;
+        prefixLen: number;
+        body: string;
+      }
+    | null => {
+    const checklistMatch = line.match(/^(\s*)-\s\[(?: |x|X)\]\s(.*)$/);
+    if (checklistMatch) {
+      const indent = checklistMatch[1] ?? '';
+      return {
+        kind: 'checklist',
+        nextPrefix: `${indent}- [ ] `,
+        prefixLen: indent.length + 6,
+        body: checklistMatch[2] ?? '',
+      };
+    }
+
+    const numberedMatch = line.match(/^(\s*)(\d+)\.\s(.*)$/);
+    if (numberedMatch) {
+      const indent = numberedMatch[1] ?? '';
+      const num = Number(numberedMatch[2] ?? '1');
+      return {
+        kind: 'numbered',
+        nextPrefix: `${indent}${num + 1}. `,
+        prefixLen: indent.length + String(num).length + 2,
+        body: numberedMatch[3] ?? '',
+      };
+    }
+
+    const bulletMatch = line.match(/^(\s*)([-*])\s(.*)$/);
+    if (bulletMatch) {
+      const indent = bulletMatch[1] ?? '';
+      const marker = bulletMatch[2] ?? '-';
+      return {
+        kind: 'bullet',
+        nextPrefix: `${indent}${marker} `,
+        prefixLen: indent.length + 2,
+        body: bulletMatch[3] ?? '',
+      };
+    }
+
+    return null;
+  };
+
+  const handleNoteContentKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    if (
+      e.key !== 'Enter' ||
+      e.shiftKey ||
+      e.ctrlKey ||
+      e.altKey ||
+      e.metaKey ||
+      e.nativeEvent.isComposing
+    ) {
+      return;
+    }
+
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? content.length;
+    const end = el.selectionEnd ?? content.length;
+    if (start !== end) return;
+
+    const lineStart = content.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+    const nextNewline = content.indexOf('\n', start);
+    const lineEnd = nextNewline === -1 ? content.length : nextNewline;
+    const fullLine = content.slice(lineStart, lineEnd);
+
+    const parsed = parseListLinePrefix(fullLine);
+    if (!parsed) return;
+
+    const col = start - lineStart;
+    if (col < parsed.prefixLen) return;
+
+    e.preventDefault();
+    soundEngine.playTick(760, 0.01);
+
+    // Exit list cleanly if pressing Enter on an empty list item
+    if (parsed.body.trim() === '') {
+      const nextContent = content.slice(0, lineStart) + content.slice(lineEnd);
+      setContent(nextContent);
+      window.requestAnimationFrame(() => {
+        if (!textareaRef.current) return;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(lineStart, lineStart);
+      });
+      return;
+    }
+
+    const insertion = `\n${parsed.nextPrefix}`;
+    const nextContent = content.slice(0, start) + insertion + content.slice(end);
+    const nextCursor = start + insertion.length;
+    setContent(nextContent);
+    window.requestAnimationFrame(() => {
+      if (!textareaRef.current) return;
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
+
+  // Fallback for mobile virtual keyboards (Android IME) that insert '\n' without a standard Enter keyDown
+  const handleNoteContentChange = (
+    e: React.ChangeEvent<HTMLTextAreaElement>
+  ) => {
+    const nextVal = e.target.value;
+    const pos = e.target.selectionStart ?? nextVal.length;
+
+    if (
+      nextVal.length === content.length + 1 &&
+      pos > 0 &&
+      nextVal[pos - 1] === '\n' &&
+      nextVal.slice(0, pos - 1) === content.slice(0, pos - 1)
+    ) {
+      const prevLineStart =
+        nextVal.lastIndexOf('\n', Math.max(0, pos - 2)) + 1;
+      const prevLine = nextVal.slice(prevLineStart, pos - 1);
+      const parsed = parseListLinePrefix(prevLine);
+
+      if (parsed && pos - 1 - prevLineStart >= parsed.prefixLen) {
+        if (parsed.body.trim() === '') {
+          const exited =
+            nextVal.slice(0, prevLineStart) + nextVal.slice(pos);
+          setContent(exited);
+          window.requestAnimationFrame(() => {
+            if (!textareaRef.current) return;
+            textareaRef.current.setSelectionRange(prevLineStart, prevLineStart);
+          });
+          return;
+        }
+
+        const continued =
+          nextVal.slice(0, pos) + parsed.nextPrefix + nextVal.slice(pos);
+        const nextCursor = pos + parsed.nextPrefix.length;
+        setContent(continued);
+        window.requestAnimationFrame(() => {
+          if (!textareaRef.current) return;
+          textareaRef.current.setSelectionRange(nextCursor, nextCursor);
+        });
+        return;
+      }
+    }
+
+    setContent(nextVal);
+  };
+
   // Text formatting helper around textarea selection
   const applyFormat = (
     prefix: string,
@@ -623,18 +772,30 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
       const lineEnd = blockEndIdx === -1 ? content.length : blockEndIdx;
       const targetSlice = content.slice(lineStart, lineEnd);
 
-      const formattedLines = targetSlice
-        .split('\n')
+      const rawLines = targetSlice.split('\n');
+      const formattedLines = rawLines
         .map((line, i) => {
           const linePrefix = prefix === '1. ' ? `${i + 1}. ` : prefix;
-          return line.startsWith(linePrefix) ? line : `${linePrefix}${line || placeholder}`;
+          const existing = parseListLinePrefix(line);
+          if (existing) {
+            const cleanBody = existing.body || placeholder;
+            return `${existing.kind === 'numbered' || prefix === '1. ' ? linePrefix : prefix}${cleanBody}`;
+          }
+          return line.startsWith(linePrefix)
+            ? line
+            : `${linePrefix}${line || placeholder}`;
         })
         .join('\n');
 
       nextContent =
         content.slice(0, lineStart) + formattedLines + content.slice(lineEnd);
-      nextCursorStart = lineStart;
-      nextCursorEnd = lineStart + formattedLines.length;
+      if (rawLines.length === 1 && targetSlice.trim() === '') {
+        nextCursorStart = lineStart + prefix.length;
+        nextCursorEnd = lineStart + formattedLines.length;
+      } else {
+        nextCursorStart = lineStart;
+        nextCursorEnd = lineStart + formattedLines.length;
+      }
     } else {
       const inner = selected || placeholder;
       const replacement = `${prefix}${inner}${suffix}`;
@@ -1349,7 +1510,8 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
                 id="note-content-input"
                 rows={6}
                 value={content}
-                onChange={(e) => setContent(e.target.value)}
+                onKeyDown={handleNoteContentKeyDown}
+                onChange={handleNoteContentChange}
                 placeholder="Write or dictate ideas, checklists (- [ ] item), and meeting notes..."
                 className="w-full rounded-2xl bg-slate-50 dark:bg-[#161926] p-4 text-sm leading-relaxed text-slate-900 dark:text-[#F8FAFC] placeholder:text-slate-400 dark:placeholder:text-[#64748B] border border-slate-200 dark:border-white/[0.08] focus:border-[#6366F1] focus:outline-none resize-y"
               />
