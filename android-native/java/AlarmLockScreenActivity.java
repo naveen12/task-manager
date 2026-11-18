@@ -1,7 +1,6 @@
 package __PACKAGE__;
 
 import android.app.Activity;
-import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -26,10 +25,8 @@ public class AlarmLockScreenActivity extends Activity {
     }
   };
 
-  @Override
-  protected void onCreate(Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
-
+  @SuppressWarnings("deprecation")
+  private void applyLockScreenWindowFlags() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
       setShowWhenLocked(true);
       setTurnScreenOn(true);
@@ -40,13 +37,12 @@ public class AlarmLockScreenActivity extends Activity {
       WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
       WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
     );
+  }
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-      if (km != null) {
-        km.requestDismissKeyguard(this, null);
-      }
-    }
+  @Override
+  protected void onCreate(Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    applyLockScreenWindowFlags();
 
     String type = getIntent().getStringExtra("alert_type");
     String name = getIntent().getStringExtra("alert_name");
@@ -185,6 +181,7 @@ public class AlarmLockScreenActivity extends Activity {
   protected void onNewIntent(Intent intent) {
     super.onNewIntent(intent);
     setIntent(intent);
+    applyLockScreenWindowFlags();
     recreate();
   }
 

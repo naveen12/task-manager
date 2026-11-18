@@ -39,6 +39,8 @@ export interface AndroidAlertPermissionsStatus {
   overlayPermission: boolean;
   batteryOptimizationIgnored: boolean;
   dndAccess: boolean;
+  microphone: boolean;
+  mediaAudio: boolean;
 }
 
 interface KairoAlarmNativePlugin {
@@ -48,12 +50,18 @@ interface KairoAlarmNativePlugin {
   }) => Promise<{ scheduled: number }>;
   getPermissionStatus: () => Promise<Omit<AndroidAlertPermissionsStatus, 'isNativeAndroid'>>;
   requestNotificationPermission: () => Promise<{ granted: boolean }>;
+  requestMicrophonePermission?: () => Promise<{ granted: boolean }>;
+  requestMediaAudioPermission?: () => Promise<{ granted: boolean }>;
+  openNotificationSettings?: () => Promise<void>;
   openExactAlarmSettings: () => Promise<void>;
   openFullScreenIntentSettings: () => Promise<void>;
   openOverlaySettings: () => Promise<void>;
   openBatterySettings: () => Promise<void>;
   openAppInfoSettings: () => Promise<void>;
   openDndSettings?: () => Promise<void>;
+  testLockScreenAlert?: (opts?: {
+    delaySeconds?: number;
+  }) => Promise<{ scheduled: boolean; triggerAtMs: number }>;
   setFocusDndState?: (opts: {
     enabled: boolean;
     enableDnd?: boolean;
@@ -67,6 +75,7 @@ interface KairoAlarmNativePlugin {
     handledJson: string;
     isAlertActive?: boolean;
     activeSlotKey?: string;
+    stoppedFocusEndMs?: number;
   }>;
   markAlertHandled: (opts: { slotKey: string }) => Promise<void>;
   startVoiceDictation?: (opts?: { prompt?: string }) => Promise<{ text: string }>;
@@ -244,10 +253,16 @@ export async function fetchNativeHandledAlerts(): Promise<{
   handled: NativeHandledAlert[];
   isAlertActive: boolean;
   activeSlotKey: string;
+  stoppedFocusEndMs: number;
 }> {
   const plugin = getKairoAlarmPlugin();
   if (!plugin || !plugin.consumeHandledAlerts) {
-    return { handled: [], isAlertActive: false, activeSlotKey: '' };
+    return {
+      handled: [],
+      isAlertActive: false,
+      activeSlotKey: '',
+      stoppedFocusEndMs: 0,
+    };
   }
   try {
     const res = await plugin.consumeHandledAlerts();
@@ -256,9 +271,15 @@ export async function fetchNativeHandledAlerts(): Promise<{
       handled: Array.isArray(parsed) ? parsed : [],
       isAlertActive: Boolean(res.isAlertActive),
       activeSlotKey: res.activeSlotKey ?? '',
+      stoppedFocusEndMs: Number(res.stoppedFocusEndMs ?? 0) || 0,
     };
   } catch {
-    return { handled: [], isAlertActive: false, activeSlotKey: '' };
+    return {
+      handled: [],
+      isAlertActive: false,
+      activeSlotKey: '',
+      stoppedFocusEndMs: 0,
+    };
   }
 }
 
@@ -283,6 +304,8 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       overlayPermission: false,
       batteryOptimizationIgnored: false,
       dndAccess: false,
+      microphone: false,
+      mediaAudio: false,
     };
   }
   try {
@@ -291,6 +314,8 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       isNativeAndroid: true,
       ...status,
       dndAccess: Boolean(status.dndAccess),
+      microphone: Boolean(status.microphone),
+      mediaAudio: Boolean(status.mediaAudio),
     };
   } catch {
     return {
@@ -301,17 +326,22 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       overlayPermission: false,
       batteryOptimizationIgnored: false,
       dndAccess: false,
+      microphone: false,
+      mediaAudio: false,
     };
   }
 }
 
 export type AndroidPermissionAction =
   | 'notifications'
+  | 'notificationSettings'
   | 'exactAlarm'
   | 'fullScreen'
   | 'overlay'
   | 'battery'
   | 'dnd'
+  | 'microphone'
+  | 'mediaAudio'
   | 'appInfo';
 
 export async function triggerAndroidPermissionSetting(
@@ -322,6 +352,8 @@ export async function triggerAndroidPermissionSetting(
   try {
     if (kind === 'notifications') {
       await plugin.requestNotificationPermission();
+    } else if (kind === 'notificationSettings') {
+      await plugin.openNotificationSettings?.();
     } else if (kind === 'exactAlarm') {
       await plugin.openExactAlarmSettings();
     } else if (kind === 'fullScreen') {
@@ -332,11 +364,28 @@ export async function triggerAndroidPermissionSetting(
       await plugin.openBatterySettings();
     } else if (kind === 'dnd') {
       await plugin.openDndSettings?.();
+    } else if (kind === 'microphone') {
+      await plugin.requestMicrophonePermission?.();
+    } else if (kind === 'mediaAudio') {
+      await plugin.requestMediaAudioPermission?.();
     } else if (kind === 'appInfo') {
       await plugin.openAppInfoSettings?.();
     }
   } catch {
     // Ignore
+  }
+}
+
+export async function scheduleNativeLockScreenTest(
+  delaySeconds = 5
+): Promise<boolean> {
+  const plugin = getKairoAlarmPlugin();
+  if (!plugin || !plugin.testLockScreenAlert) return false;
+  try {
+    const res = await plugin.testLockScreenAlert({ delaySeconds });
+    return Boolean(res?.scheduled);
+  } catch {
+    return false;
   }
 }
 

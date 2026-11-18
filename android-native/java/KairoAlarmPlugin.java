@@ -3,6 +3,7 @@ package __PACKAGE__;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlarmManager;
+import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.ActivityNotFoundException;
 import android.content.ContentResolver;
@@ -19,6 +20,7 @@ import android.provider.MediaStore;
 import android.provider.Settings;
 import android.speech.RecognizerIntent;
 import androidx.activity.result.ActivityResult;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -33,7 +35,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.Locale;
 
 @CapacitorPlugin(
@@ -42,6 +46,18 @@ import java.util.Locale;
     @Permission(
       strings = { Manifest.permission.POST_NOTIFICATIONS },
       alias = "notifications"
+    ),
+    @Permission(
+      strings = { Manifest.permission.RECORD_AUDIO },
+      alias = "microphone"
+    ),
+    @Permission(
+      strings = { Manifest.permission.READ_MEDIA_AUDIO },
+      alias = "mediaAudio"
+    ),
+    @Permission(
+      strings = { Manifest.permission.READ_EXTERNAL_STORAGE },
+      alias = "storage"
     )
   }
 )
@@ -59,10 +75,12 @@ public class KairoAlarmPlugin extends Plugin {
 
   @PluginMethod
   public void consumeHandledAlerts(PluginCall call) {
+    Context ctx = getContext();
     JSObject ret = new JSObject();
-    ret.put("handledJson", AlarmScheduler.getHandledAlertsJson(getContext()));
+    ret.put("handledJson", AlarmScheduler.getHandledAlertsJson(ctx));
     ret.put("isAlertActive", AlarmForegroundService.isAlertActive);
     ret.put("activeSlotKey", AlarmForegroundService.activeSlotKey);
+    ret.put("stoppedFocusEndMs", FocusDndManager.consumeStoppedFocusEndMs(ctx));
     call.resolve(ret);
   }
 
@@ -76,12 +94,25 @@ public class KairoAlarmPlugin extends Plugin {
   @PluginMethod
   public void getPermissionStatus(PluginCall call) {
     Context ctx = getContext();
-    boolean postNotifications = true;
+
+    boolean notificationsEnabled = NotificationManagerCompat.from(ctx).areNotificationsEnabled();
+    boolean postRuntimeGranted = true;
     if (Build.VERSION.SDK_INT >= 33) {
-      postNotifications =
+      postRuntimeGranted =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS)
         == PackageManager.PERMISSION_GRANTED;
     }
+    boolean channelAllowed = true;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+      if (nm != null) {
+        NotificationChannel ch = nm.getNotificationChannel(AlarmForegroundService.CHANNEL_ID);
+        if (ch != null && ch.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+          channelAllowed = false;
+        }
+      }
+    }
+    boolean postNotifications = notificationsEnabled && postRuntimeGranted && channelAllowed;
 
     boolean exactAlarms = true;
     if (Build.VERSION.SDK_INT >= 31) {
@@ -89,7 +120,7 @@ public class KairoAlarmPlugin extends Plugin {
       exactAlarms = am != null && am.canScheduleExactAlarms();
     }
 
-    boolean fullScreenIntent = true;
+    boolean fullScreenIntent = postNotifications;
     if (Build.VERSION.SDK_INT >= 34) {
       NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
       if (nm != null) {
@@ -115,6 +146,21 @@ public class KairoAlarmPlugin extends Plugin {
 
     boolean dndAccess = FocusDndManager.isDndAccessGranted(ctx);
 
+    boolean microphone =
+      ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO)
+      == PackageManager.PERMISSION_GRANTED;
+
+    boolean mediaAudio;
+    if (Build.VERSION.SDK_INT >= 33) {
+      mediaAudio =
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_MEDIA_AUDIO)
+        == PackageManager.PERMISSION_GRANTED;
+    } else {
+      mediaAudio =
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_EXTERNAL_STORAGE)
+        == PackageManager.PERMISSION_GRANTED;
+    }
+
     JSObject ret = new JSObject();
     ret.put("postNotifications", postNotifications);
     ret.put("exactAlarms", exactAlarms);
@@ -122,26 +168,92 @@ public class KairoAlarmPlugin extends Plugin {
     ret.put("overlayPermission", overlayPermission);
     ret.put("batteryOptimizationIgnored", batteryIgnored);
     ret.put("dndAccess", dndAccess);
+    ret.put("microphone", microphone);
+    ret.put("mediaAudio", mediaAudio);
     call.resolve(ret);
   }
 
   @PluginMethod
   public void requestNotificationPermission(PluginCall call) {
-    if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) {
+    if (Build.VERSION.SDK_INT >= 33 && getPermissionState("notifications") != PermissionState.GRANTED) {
+      requestPermissionForAlias("notifications", call, "notificationsPermsCallback");
+      return;
+    }
+    if (!NotificationManagerCompat.from(getContext()).areNotificationsEnabled()) {
+      openNotificationSettingsInternal();
+    }
+    JSObject ret = new JSObject();
+    ret.put("granted", NotificationManagerCompat.from(getContext()).areNotificationsEnabled());
+    call.resolve(ret);
+  }
+
+  @PermissionCallback
+  private void notificationsPermsCallback(PluginCall call) {
+    boolean granted =
+      getPermissionState("notifications") == PermissionState.GRANTED &&
+      NotificationManagerCompat.from(getContext()).areNotificationsEnabled();
+    JSObject ret = new JSObject();
+    ret.put("granted", granted);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void requestMicrophonePermission(PluginCall call) {
+    if (getPermissionState("microphone") == PermissionState.GRANTED) {
       JSObject ret = new JSObject();
       ret.put("granted", true);
       call.resolve(ret);
       return;
     }
-    requestPermissionForAlias("notifications", call, "notificationsPermsCallback");
+    requestPermissionForAlias("microphone", call, "microphonePermsCallback");
   }
 
   @PermissionCallback
-  private void notificationsPermsCallback(PluginCall call) {
-    boolean granted = getPermissionState("notifications") == PermissionState.GRANTED;
+  private void microphonePermsCallback(PluginCall call) {
+    boolean granted = getPermissionState("microphone") == PermissionState.GRANTED;
     JSObject ret = new JSObject();
     ret.put("granted", granted);
     call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void requestMediaAudioPermission(PluginCall call) {
+    String alias = Build.VERSION.SDK_INT >= 33 ? "mediaAudio" : "storage";
+    if (getPermissionState(alias) == PermissionState.GRANTED) {
+      JSObject ret = new JSObject();
+      ret.put("granted", true);
+      call.resolve(ret);
+      return;
+    }
+    requestPermissionForAlias(alias, call, "mediaAudioPermsCallback");
+  }
+
+  @PermissionCallback
+  private void mediaAudioPermsCallback(PluginCall call) {
+    String alias = Build.VERSION.SDK_INT >= 33 ? "mediaAudio" : "storage";
+    boolean granted = getPermissionState(alias) == PermissionState.GRANTED;
+    JSObject ret = new JSObject();
+    ret.put("granted", granted);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
+  public void openNotificationSettings(PluginCall call) {
+    openNotificationSettingsInternal();
+    call.resolve();
+  }
+
+  private void openNotificationSettingsInternal() {
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+        intent.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
+        return;
+      }
+    } catch (Exception ignored) {}
+    openAppInfoFallback();
   }
 
   @PluginMethod
@@ -168,10 +280,7 @@ public class KairoAlarmPlugin extends Plugin {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         getContext().startActivity(intent);
       } else {
-        Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-        intent.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        getContext().startActivity(intent);
+        openNotificationSettingsInternal();
       }
     } catch (Exception e) {
       openAppInfoFallback();
@@ -251,6 +360,33 @@ public class KairoAlarmPlugin extends Plugin {
   }
 
   @PluginMethod
+  public void testLockScreenAlert(PluginCall call) {
+    int delaySec = Math.max(2, Math.min(30, call.getInt("delaySeconds", 5)));
+    long triggerAtMs = System.currentTimeMillis() + delaySec * 1000L;
+    String timeLabel = new SimpleDateFormat("hh:mm a", Locale.US).format(new Date(triggerAtMs));
+    String slotKey = "lockscreen-test-" + triggerAtMs;
+    int reqCode = Math.abs(slotKey.hashCode());
+
+    AlarmScheduler.scheduleSingle(
+      getContext(),
+      reqCode,
+      "lockscreen-test",
+      slotKey,
+      "alarm",
+      "Lock-Screen Alarm Test",
+      timeLabel,
+      triggerAtMs,
+      5,
+      "sound_and_vibrate"
+    );
+
+    JSObject ret = new JSObject();
+    ret.put("scheduled", true);
+    ret.put("triggerAtMs", triggerAtMs);
+    call.resolve(ret);
+  }
+
+  @PluginMethod
   public void setFocusDndState(PluginCall call) {
     boolean enabled = call.getBoolean("enabled", false);
     boolean enableDnd = call.getBoolean("enableDnd", true);
@@ -271,10 +407,18 @@ public class KairoAlarmPlugin extends Plugin {
       }
       if (endsAtMs > System.currentTimeMillis() + 500L) {
         FocusDndManager.scheduleFocusEnd(ctx, endsAtMs, focusLabel, timeLabel);
+        FocusDndManager.startLockScreenCountdown(
+          ctx,
+          endsAtMs,
+          focusLabel,
+          timeLabel,
+          dndApplied
+        );
       }
     } else {
       FocusDndManager.cancelFocusEnd(ctx);
       FocusDndManager.restoreFocusDnd(ctx);
+      FocusDndManager.stopLockScreenCountdown(ctx);
     }
 
     JSObject ret = new JSObject();

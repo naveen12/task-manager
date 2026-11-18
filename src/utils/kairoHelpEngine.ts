@@ -250,8 +250,8 @@ export const HELP_TOPIC_GUIDES: HelpTopicGuide[] = [
       'The Focus Timer runs 15m/25m/45m/60m deep-work sprints, optionally links to a pending task, silences Kairo task/reminder popups, and automatically toggles Android Do Not Disturb to mute other apps.',
     bullets: [
       '1. Pick Duration & Optional Task: Select 15m, 25m, 45m, or 60m on the Dashboard Focus Timer and optionally pick a task to focus on.',
-      '2. Auto-Mute Other Apps (Android APK): Grant "Do Not Disturb Access" once in the Focus Timer card or Settings. Starting Focus automatically switches Android to Do Not Disturb (muting notifications from other apps while allowing alarms).',
-      '3. Automatic Restore & Completion Alert: Pausing, resetting, or finishing the countdown automatically restores your previous notification settings—even if the phone screen is locked—and plays a Focus Complete alert.',
+      '2. Auto-Mute WhatsApp, Calls & Apps (Android APK): Tap "Enable DND" on the Focus Timer card (or in Settings) to grant Do Not Disturb Access. Starting Focus applies a strict DND policy that silences WhatsApp messages, incoming call ringers, repeat callers, and pop-up banners while allowing alarms.',
+      '3. Live Lock-Screen Countdown & Auto-Restore: While Focus runs on Android, a live countdown timer (with Full Screen and End Focus buttons) stays visible right when you tap your locked screen. Pausing, ending, or finishing automatically restores your previous notification settings and plays a Focus Complete alert.',
       '4. Quiet Kairo Popups: While focusing, non-alarm Kairo task/reminder banners can be deferred (controlled in Settings -> Notifications & Alert Popups).',
     ],
     followUps: ['What is on my schedule today?', 'How do I allow Android Overlay / Lock-Screen permissions?'],
@@ -472,10 +472,10 @@ export const HELP_TOPIC_GUIDES: HelpTopicGuide[] = [
     summary:
       'On Android, Kairo provides exact lock-screen alerts via AlarmForegroundService, Do Not Disturb access for Focus Timer, and a Home Screen Quick-Add Widget.',
     bullets: [
-      'Grant All 6 Android Permissions: Open Settings -> Notifications & Alert Popups and enable Notifications, Full-Screen Intent, Overlay, Exact Alarm, Unrestricted Battery, and Do Not Disturb Access.',
-      'Fixing "App was denied access" for Overlay (Android 13+): Tap "App Info" next to Overlay -> tap ⋮ (top-right) -> "Allow restricted settings" -> return and tap Enable.',
+      'Grant All 8 Android Permissions: Open Settings -> Notifications & Alert Popups and enable Notifications, Full-Screen Intent, Overlay, Exact Alarm, Unrestricted Battery, Do Not Disturb Access, Microphone, and Music/Audio Storage.',
+      'Fixing "App was denied access" for Overlay (Android 13+): Tap "App Info" -> tap ⋮ (top-right) -> "Allow restricted settings" -> return and tap Enable. On Xiaomi, Oppo, Vivo, Realme & OnePlus, also allow "Show on Lock Screen" and "Display pop-up windows while running in background" under App Info -> Other permissions.',
+      'Verify Lock-Screen Alarm: Tap "Test Lock-Screen (5s)" inside Settings -> Notifications & Alert Popups and lock your phone immediately to confirm Snooze & Stop pop up over the lock screen.',
       'Home Screen Quick-Add Widget: Long-press your Android home screen -> Widgets -> Kairo Quick Add. It displays today’s remaining tasks, reminders, next alarm, and 1-tap "+ Task", "+ Remind", "+ Alarm", and "+ Note" shortcuts.',
-      'Sync & Deduplication: Tap "Sync Widget" in Settings anytime to refresh widget counts manually. Native lock-screen alerts share slot deduplication with the app so alarms never ring twice.',
     ],
     followUps: ['When is my next alarm?', 'How does Focus Timer block distractions (Do Not Disturb)?'],
   },

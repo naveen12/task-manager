@@ -1,5 +1,7 @@
 package __PACKAGE__;
 
+import android.app.ActivityOptions;
+import android.app.KeyguardManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -7,6 +9,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.RingtoneManager;
@@ -15,6 +18,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import androidx.core.app.NotificationCompat;
@@ -28,7 +32,7 @@ public class AlarmForegroundService extends Service {
   public static final String ACTION_STOP = "com.kairo.app.ACTION_STOP_ALERT";
   public static final String ACTION_CLOSE_POPUP = "com.kairo.app.ACTION_CLOSE_LOCK_POPUP";
 
-  private static final String CHANNEL_ID = "kairo_urgent_alerts_v2";
+  public static final String CHANNEL_ID = "kairo_urgent_alerts_v3";
   private static final int NOTIFICATION_ID = 42001;
   private static final long CRESCENDO_DURATION_MS = 15000L;
 
@@ -37,6 +41,7 @@ public class AlarmForegroundService extends Service {
 
   private MediaPlayer mediaPlayer;
   private Vibrator vibrator;
+  private PowerManager.WakeLock screenWakeLock;
   private final Handler volumeHandler = new Handler(Looper.getMainLooper());
   private Runnable volumeRunnable;
 
@@ -122,9 +127,10 @@ public class AlarmForegroundService extends Service {
       0L
     );
 
+    wakeScreenIfNeeded();
     ensureNotificationChannel();
     Notification notification = buildUrgentNotification();
-    startForeground(NOTIFICATION_ID, notification);
+    promoteToForegroundAndNotify(notification);
 
     if (!"vibrate_only".equalsIgnoreCase(currentVibrationMode)) {
       startAlarmAudio();
@@ -141,10 +147,65 @@ public class AlarmForegroundService extends Service {
     return START_STICKY;
   }
 
+  private void promoteToForegroundAndNotify(Notification notification) {
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        startForeground(
+          NOTIFICATION_ID,
+          notification,
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        );
+      } else {
+        startForeground(NOTIFICATION_ID, notification);
+      }
+    } catch (Exception ignored) {}
+
+    try {
+      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+      if (nm != null) {
+        nm.notify(NOTIFICATION_ID, notification);
+      }
+    } catch (Exception ignored) {}
+  }
+
+  @SuppressWarnings("deprecation")
+  private void wakeScreenIfNeeded() {
+    try {
+      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+      if (pm == null) return;
+      KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+      boolean locked = km != null && km.isKeyguardLocked();
+      if (!pm.isInteractive() || locked) {
+        releaseScreenWakeLock();
+        screenWakeLock = pm.newWakeLock(
+          PowerManager.SCREEN_BRIGHT_WAKE_LOCK |
+          PowerManager.ACQUIRE_CAUSES_WAKEUP |
+          PowerManager.ON_AFTER_RELEASE,
+          "Kairo::AlarmLockScreenWake"
+        );
+        screenWakeLock.acquire(15000L);
+      }
+    } catch (Exception ignored) {}
+  }
+
+  private void releaseScreenWakeLock() {
+    if (screenWakeLock != null) {
+      try {
+        if (screenWakeLock.isHeld()) {
+          screenWakeLock.release();
+        }
+      } catch (Exception ignored) {}
+      screenWakeLock = null;
+    }
+  }
+
   private void ensureNotificationChannel() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
     NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
     if (nm == null) return;
+
+    NotificationChannel existing = nm.getNotificationChannel(CHANNEL_ID);
+    if (existing != null) return;
 
     NotificationChannel channel = new NotificationChannel(
       CHANNEL_ID,
@@ -154,6 +215,7 @@ public class AlarmForegroundService extends Service {
     channel.setDescription("High-priority heads-up and lock-screen alerts with Snooze and Stop");
     channel.enableLights(true);
     channel.enableVibration(true);
+    channel.setSound(null, null);
     channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
     channel.setBypassDnd(true);
     nm.createNotificationChannel(channel);
@@ -174,6 +236,7 @@ public class AlarmForegroundService extends Service {
       Intent.FLAG_ACTIVITY_SINGLE_TOP
     );
     fullScreenIntent.putExtra("alert_id", currentId);
+    fullScreenIntent.putExtra("slot_key", currentSlotKey);
     fullScreenIntent.putExtra("alert_type", currentType);
     fullScreenIntent.putExtra("alert_name", currentName);
     fullScreenIntent.putExtra("alert_time", currentTime);
@@ -218,6 +281,7 @@ public class AlarmForegroundService extends Service {
       .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .setDefaults(NotificationCompat.DEFAULT_LIGHTS)
+      .setSilent(true)
       .setOngoing(true)
       .setAutoCancel(false)
       .setContentIntent(fullScreenPi)
@@ -233,14 +297,25 @@ public class AlarmForegroundService extends Service {
       popupIntent.setFlags(
         Intent.FLAG_ACTIVITY_NEW_TASK |
         Intent.FLAG_ACTIVITY_CLEAR_TOP |
-        Intent.FLAG_ACTIVITY_SINGLE_TOP
+        Intent.FLAG_ACTIVITY_SINGLE_TOP |
+        Intent.FLAG_ACTIVITY_NO_USER_ACTION
       );
       popupIntent.putExtra("alert_id", currentId);
+      popupIntent.putExtra("slot_key", currentSlotKey);
       popupIntent.putExtra("alert_type", currentType);
       popupIntent.putExtra("alert_name", currentName);
       popupIntent.putExtra("alert_time", currentTime);
       popupIntent.putExtra("snooze_minutes", currentSnoozeMinutes);
-      startActivity(popupIntent);
+
+      if (Build.VERSION.SDK_INT >= 34) {
+        ActivityOptions opts = ActivityOptions.makeBasic();
+        opts.setPendingIntentBackgroundActivityStartMode(
+          ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+        );
+        startActivity(popupIntent, opts.toBundle());
+      } else {
+        startActivity(popupIntent);
+      }
     } catch (Exception ignored) {}
   }
 
@@ -357,10 +432,18 @@ public class AlarmForegroundService extends Service {
     activeSlotKey = "";
     stopAlarmAudio();
     stopAlarmVibration();
+    releaseScreenWakeLock();
 
     Intent closePopup = new Intent(ACTION_CLOSE_POPUP);
     closePopup.setPackage(getPackageName());
     sendBroadcast(closePopup);
+
+    try {
+      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+      if (nm != null) {
+        nm.cancel(NOTIFICATION_ID);
+      }
+    } catch (Exception ignored) {}
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
       stopForeground(STOP_FOREGROUND_REMOVE);
@@ -376,6 +459,7 @@ public class AlarmForegroundService extends Service {
     activeSlotKey = "";
     stopAlarmAudio();
     stopAlarmVibration();
+    releaseScreenWakeLock();
     super.onDestroy();
   }
 }

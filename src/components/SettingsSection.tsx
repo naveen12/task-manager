@@ -56,6 +56,7 @@ interface SettingsSectionProps {
   notificationPermission: NotificationPermissionState;
   onRequestNotificationPermission: () => void;
   onTestAlertPopup: () => void;
+  onTestLockScreenAlert?: () => Promise<boolean>;
   androidPermissions?: AndroidAlertPermissionsStatus;
   onTriggerAndroidPermission?: (kind: AndroidPermissionAction) => void;
 }
@@ -214,6 +215,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   notificationPermission,
   onRequestNotificationPermission,
   onTestAlertPopup,
+  onTestLockScreenAlert,
   androidPermissions,
   onTriggerAndroidPermission,
 }) => {
@@ -221,6 +223,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     Record<SettingsSectionKey, boolean>
   >(INITIAL_OPEN_SECTIONS);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [lockTestStatus, setLockTestStatus] = useState<string | null>(null);
 
   const toggleSection = (key: SettingsSectionKey) => {
     soundEngine.playTick(820, 0.015);
@@ -280,6 +283,8 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
         androidPermissions.exactAlarms,
         androidPermissions.batteryOptimizationIgnored,
         androidPermissions.dndAccess,
+        androidPermissions.microphone,
+        androidPermissions.mediaAudio,
       ]
     : [];
   const androidGrantedCount = androidChecks.filter(Boolean).length;
@@ -603,49 +608,78 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
 
         {androidPermissions?.isNativeAndroid && onTriggerAndroidPermission && (
           <div className="mt-5 pt-5 border-t border-slate-200 dark:border-white/[0.06] flex flex-col gap-2.5">
-            <p className="text-xs font-semibold text-slate-800 dark:text-[#F8FAFC]">
-              Android Lock-Screen &amp; Background Alert Permissions
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-slate-800 dark:text-[#F8FAFC]">
+                Android App &amp; Lock-Screen Permissions ({androidGrantedCount}/{androidChecks.length})
+              </p>
+              <button
+                type="button"
+                onClick={() => onTriggerAndroidPermission('appInfo')}
+                className="min-h-[32px] rounded-full bg-slate-100 dark:bg-white/[0.06] border border-slate-200 dark:border-white/10 px-3 text-[11px] font-medium text-slate-700 dark:text-[#F8FAFC] cursor-pointer whitespace-nowrap"
+              >
+                Open App Info
+              </button>
+            </div>
             <p className="text-xs text-slate-500 dark:text-[#94A3B8] mb-1">
-              Enable all permissions below so Tasks, Reminders, and Alarms wake your locked screen and Focus Timer can mute other apps via Do Not Disturb.
+              Enable all permissions below so Alarms, Reminders, and Tasks wake your locked screen, Focus Timer can mute other apps, and Voice Notes / Ringtones work reliably.
             </p>
             {(
               [
                 {
                   key: 'notifications' as AndroidPermissionAction,
-                  title: 'Heads-Up, Lock-Screen & High-Priority Notifications',
+                  manageAction: 'notificationSettings' as AndroidPermissionAction,
+                  title: 'Notifications (Heads-Up & Lock-Screen Alerts)',
                   granted: androidPermissions.postNotifications,
-                  hint: null,
+                  hint: 'Also confirm "Lock screen notifications" and "Pop on screen" are turned ON inside Channel Settings.',
                 },
                 {
                   key: 'fullScreen' as AndroidPermissionAction,
+                  manageAction: 'fullScreen' as AndroidPermissionAction,
                   title: 'Full-Screen Intent (Show Alert Over Lock Screen)',
                   granted: androidPermissions.fullScreenIntent,
-                  hint: null,
+                  hint: 'Required on Android 14+ so alarms appear full-screen when your phone is locked.',
                 },
                 {
                   key: 'overlay' as AndroidPermissionAction,
+                  manageAction: 'overlay' as AndroidPermissionAction,
                   title: 'Overlay / Draw Over Other Apps',
                   granted: androidPermissions.overlayPermission,
-                  hint: 'Android 13+ APK note: If denied, tap "App Info" → tap ⋮ (top-right) → "Allow restricted settings", then tap Enable.',
+                  hint: 'Android 13+ APK note: If disabled, tap "App Info" → tap ⋮ (top-right) → "Allow restricted settings", then tap Enable.',
                 },
                 {
                   key: 'exactAlarm' as AndroidPermissionAction,
+                  manageAction: 'exactAlarm' as AndroidPermissionAction,
                   title: 'Exact Alarm & Reminder Timing',
                   granted: androidPermissions.exactAlarms,
                   hint: null,
                 },
                 {
                   key: 'battery' as AndroidPermissionAction,
+                  manageAction: 'battery' as AndroidPermissionAction,
                   title: 'Unrestricted Background / Battery Optimization Off',
                   granted: androidPermissions.batteryOptimizationIgnored,
-                  hint: null,
+                  hint: 'Prevents Android from delaying alarms while the phone sleeps.',
                 },
                 {
                   key: 'dnd' as AndroidPermissionAction,
-                  title: 'Do Not Disturb Access (Mute Other Apps During Focus)',
+                  manageAction: 'dnd' as AndroidPermissionAction,
+                  title: 'Do Not Disturb Access (Focus Distraction Shield)',
                   granted: androidPermissions.dndAccess,
-                  hint: 'Allows Focus Timer to silence external app notifications while focusing and automatically restore them afterward.',
+                  hint: 'Allows Focus Timer to silence other apps while focusing and restore them afterward.',
+                },
+                {
+                  key: 'microphone' as AndroidPermissionAction,
+                  manageAction: 'appInfo' as AndroidPermissionAction,
+                  title: 'Microphone (Voice-to-Text Notes)',
+                  granted: androidPermissions.microphone,
+                  hint: 'Allows dictating notes hands-free using speech recognition.',
+                },
+                {
+                  key: 'mediaAudio' as AndroidPermissionAction,
+                  manageAction: 'appInfo' as AndroidPermissionAction,
+                  title: 'Music, Audio & Storage (Ringtones & Local Backups)',
+                  granted: androidPermissions.mediaAudio,
+                  hint: 'Allows picking device alarm audio and exporting local backup files.',
                 },
               ] as const
             ).map((perm) => (
@@ -672,28 +706,74 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
                     </p>
                   )}
                 </div>
-                {!perm.granted && (
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {perm.key === 'overlay' && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {!perm.granted ? (
+                    <>
+                      {perm.key === 'overlay' && (
+                        <button
+                          type="button"
+                          onClick={() => onTriggerAndroidPermission('appInfo')}
+                          className="min-h-[36px] rounded-full bg-white dark:bg-white/[0.06] border border-slate-200 dark:border-white/10 px-3 text-xs font-medium text-slate-700 dark:text-[#F8FAFC] cursor-pointer whitespace-nowrap"
+                        >
+                          App Info
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => onTriggerAndroidPermission('appInfo')}
-                        className="min-h-[36px] rounded-full bg-white dark:bg-white/[0.06] border border-slate-200 dark:border-white/10 px-3 text-xs font-medium text-slate-700 dark:text-[#F8FAFC] cursor-pointer whitespace-nowrap"
+                        onClick={() => onTriggerAndroidPermission(perm.key)}
+                        className="min-h-[36px] rounded-full bg-indigo-600 px-3.5 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
                       >
-                        App Info
+                        Enable
                       </button>
-                    )}
+                    </>
+                  ) : (
                     <button
                       type="button"
-                      onClick={() => onTriggerAndroidPermission(perm.key)}
-                      className="min-h-[36px] rounded-full bg-indigo-600 px-3.5 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
+                      onClick={() => onTriggerAndroidPermission(perm.manageAction)}
+                      className="min-h-[32px] rounded-full bg-white dark:bg-white/[0.05] border border-slate-200 dark:border-white/10 px-3 text-[11px] font-medium text-slate-600 dark:text-[#94A3B8] hover:text-slate-900 dark:hover:text-[#F8FAFC] cursor-pointer whitespace-nowrap"
                     >
-                      Enable
+                      Manage
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             ))}
+
+            {/* Lock-Screen Verification & OEM Lock-Screen Tip */}
+            <div className="mt-1 rounded-2xl bg-amber-50/70 dark:bg-[#F59E0B]/10 border border-amber-200 dark:border-[#F59E0B]/25 px-3.5 py-3 flex flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                    Verify Alarm on Locked Screen
+                  </p>
+                  <p className="mt-0.5 text-[11px] leading-snug text-slate-600 dark:text-[#94A3B8]">
+                    Xiaomi, Oppo, Vivo, Realme &amp; OnePlus devices also require enabling &ldquo;Show on Lock Screen&rdquo; and &ldquo;Display pop-up windows while running in background&rdquo; inside App Info → Other permissions.
+                  </p>
+                </div>
+                {onTestLockScreenAlert && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onTestLockScreenAlert().then((scheduled) => {
+                        setLockTestStatus(
+                          scheduled
+                            ? 'Test alarm scheduled in 5 seconds — lock your phone screen now to verify!'
+                            : 'Unable to schedule native lock-screen test.'
+                        );
+                      });
+                    }}
+                    className="min-h-[36px] rounded-full bg-amber-500 text-slate-950 px-3.5 text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Test Lock-Screen (5s)
+                  </button>
+                )}
+              </div>
+              {lockTestStatus && (
+                <p className="text-[11px] font-medium text-amber-800 dark:text-[#FCD34D]">
+                  {lockTestStatus}
+                </p>
+              )}
+            </div>
 
             <div className="mt-2 rounded-2xl bg-indigo-50/70 dark:bg-[#6366F1]/10 border border-indigo-200 dark:border-[#6366F1]/25 px-3.5 py-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-start gap-2.5 min-w-0 flex-1">

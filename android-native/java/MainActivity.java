@@ -3,9 +3,7 @@ package __PACKAGE__;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.os.Build;
 import android.os.Bundle;
-import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -17,16 +15,6 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(KairoAlarmPlugin.class);
     captureQuickAddIntent(getIntent());
     super.onCreate(savedInstanceState);
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-      setShowWhenLocked(true);
-      setTurnScreenOn(true);
-    } else {
-      getWindow().addFlags(
-        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
-        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-      );
-    }
   }
 
   @Override

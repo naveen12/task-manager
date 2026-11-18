@@ -8,7 +8,7 @@
 
 - **Dashboard, Focus Timer & Collapsible Calendar**
   - Chronological **Morning / Afternoon / Evening** timeline sorted by time and priority with quick pill filters (`All`, `P1 Critical`, `Tasks`, `Reminders`, `Alarms`) and **Copy Day**.
-  - Built-in **Focus Timer** (`15m`, `25m`, `45m`, `60m`) with optional task linking, quiet Kairo popup mode, and automatic **Android Do Not Disturb** distraction blocking that restores your previous notification state when finished or paused.
+  - Built-in **Focus Timer** (`15m`, `25m`, `45m`, `60m`) with optional task linking, quiet Kairo popup mode, automatic strict **Android Do Not Disturb** distraction blocking (restoring your prior notification state when finished or paused), and a live **Lock-Screen Countdown Timer** (`Full Screen` & `End Focus` actions) visible whenever you wake your locked phone.
   - Top collapsible monthly **Calendar** (hidden by default with a show/hide toggle) showing indicators on days with scheduled items and displaying a **Selected Day Details** breakdown.
   - Quick `+` action menu to jump directly into creating a **Task**, **Reminder**, **Alarm**, or **Note**.
 - **Tasks & Auto-Carryover**
@@ -127,10 +127,11 @@ npx cap sync android
 - `POST_NOTIFICATIONS`
 - `SCHEDULE_EXACT_ALARM` & `USE_EXACT_ALARM`
 - `USE_FULL_SCREEN_INTENT`
-- `WAKE_LOCK`
+- `WAKE_LOCK` & `DISABLE_KEYGUARD`
 - `SYSTEM_ALERT_WINDOW`
 - `FOREGROUND_SERVICE` & `FOREGROUND_SERVICE_MEDIA_PLAYBACK`
-- `RECEIVE_BOOT_COMPLETED`, `VIBRATE`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, and `ACCESS_NOTIFICATION_POLICY`
+- `RECEIVE_BOOT_COMPLETED`, `VIBRATE`, `MODIFY_AUDIO_SETTINGS`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, and `ACCESS_NOTIFICATION_POLICY`
+- `RECORD_AUDIO`, `READ_MEDIA_AUDIO`, `READ_EXTERNAL_STORAGE` (<= API 32), `WRITE_EXTERNAL_STORAGE` (<= API 29), and `ACCESS_NETWORK_STATE`
 
 ### 3. Build the Debug APK
 
@@ -150,12 +151,16 @@ Output APK path:
 `android/app/build/outputs/apk/debug/app-debug.apk`
 
 ### 4. Grant Device Permissions & Add Home Widget After Installing
-Open **Kairo → Settings → Notifications & Alert Popups** on your Android device and tap **Enable** on each listed permission:
-1. **Heads-Up, Lock-Screen & High-Priority Notifications**
+Open **Kairo → Settings → Notifications & Alert Popups** on your Android device and tap **Enable** on all 8 listed permissions:
+1. **Notifications (Heads-Up & Lock-Screen Alerts)**
 2. **Full-Screen Intent (Show Alert Over Lock Screen)**
 3. **Overlay / Draw Over Other Apps**
 4. **Exact Alarm & Reminder Timing**
 5. **Unrestricted Background / Battery Optimization Off**
-6. **Do Not Disturb Access (Mute Other Apps During Focus)**
+6. **Do Not Disturb Access (Focus Distraction Shield)**
+7. **Microphone (Voice-to-Text Notes)**
+8. **Music, Audio & Storage (Ringtones & Local Backups)**
+
+Tap **Test Lock-Screen (5s)** and lock your screen immediately to verify lock-screen Snooze/Stop popups. (On Xiaomi, Oppo, Vivo, Realme & OnePlus, also enable **"Show on Lock Screen"** and **"Display pop-up windows while running in background"** in **Open App Info → Other permissions**.)
 
 To add the **Kairo Quick Add** widget: long-press an empty space on your Android home screen → **Widgets** → **Kairo Quick Add**.

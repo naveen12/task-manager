@@ -62,6 +62,10 @@ interface DashboardSectionProps {
   onToggleReminderDone: (id: string) => void;
   onToggleAlarm: (id: string, enabled: boolean) => void;
   onToggleNoteChecklistLine?: (noteId: string, lineIdx: number) => void;
+  isNativeAndroid?: boolean;
+  dndAccessGranted?: boolean;
+  focusAutoDndEnabled?: boolean;
+  onEnableDndAccess?: () => void;
 }
 
 type TimelineFilter = 'all' | 'p1' | 'tasks' | 'reminders' | 'alarms';
@@ -106,6 +110,10 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
   onToggleReminderDone,
   onToggleAlarm,
   onToggleNoteChecklistLine,
+  isNativeAndroid = false,
+  dndAccessGranted = false,
+  focusAutoDndEnabled = true,
+  onEnableDndAccess,
 }) => {
   const today = getTodayDateString();
   const todayLocal = useMemo(() => parseYMDToLocalDate(today), [today]);
@@ -1068,6 +1076,29 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
                 </button>
               </div>
             </div>
+
+            {isNativeAndroid && focusAutoDndEnabled && !dndAccessGranted && onEnableDndAccess && (
+              <div className="rounded-2xl bg-amber-50 dark:bg-[#F59E0B]/10 border border-amber-200 dark:border-[#F59E0B]/30 px-3.5 py-2.5 flex items-center justify-between gap-2.5">
+                <p className="text-[11px] leading-snug text-amber-800 dark:text-[#FCD34D]">
+                  {focusState.running
+                    ? 'Do Not Disturb access is off — WhatsApp & calls are not silenced yet.'
+                    : 'Allow Do Not Disturb access so Focus silences WhatsApp & incoming calls.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={onEnableDndAccess}
+                  className="min-h-[32px] shrink-0 rounded-full bg-amber-500 px-3 text-[11px] font-semibold text-slate-950 cursor-pointer whitespace-nowrap"
+                >
+                  Enable DND
+                </button>
+              </div>
+            )}
+
+            {focusState.running && focusState.dndActive && (
+              <p className="text-[11px] leading-snug text-emerald-700 dark:text-[#34D399]">
+                Do Not Disturb active — WhatsApp, app notifications &amp; call ringers are silenced until Focus finishes.
+              </p>
+            )}
           </div>
 
           <div className="rounded-[28px] bg-white dark:bg-[#1A1D2D]/75 border border-slate-200 dark:border-white/[0.08] p-5 sm:p-6 shadow-xs dark:shadow-none">

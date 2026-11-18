@@ -63,6 +63,7 @@ import {
   markNativeSlotHandled,
   notifyNativeServiceAction,
   saveNativeAndroidBackup,
+  scheduleNativeLockScreenTest,
   setNativeFocusDndState,
   syncNativeAndroidAlerts,
   syncNativeWidgetSummary,
@@ -251,6 +252,8 @@ export default function App() {
       overlayPermission: false,
       batteryOptimizationIgnored: false,
       dndAccess: false,
+      microphone: false,
+      mediaAudio: false,
     });
 
   const [focusState, setFocusState] = useState<FocusTimerState>(() => {
@@ -429,7 +432,26 @@ export default function App() {
         handledSlotKeys: new Set<string>(),
       };
     }
-    const { handled, isAlertActive, activeSlotKey } = await fetchNativeHandledAlerts();
+    const { handled, isAlertActive, activeSlotKey, stoppedFocusEndMs } =
+      await fetchNativeHandledAlerts();
+    if (stoppedFocusEndMs > 0) {
+      setFocusState((prev) => {
+        if (!prev.running) return prev;
+        if (
+          prev.endAtMs &&
+          Math.abs(prev.endAtMs - stoppedFocusEndMs) > 5000
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          running: false,
+          endAtMs: null,
+          secondsLeft: prev.presetMinutes * 60,
+          dndActive: false,
+        };
+      });
+    }
     let changed = false;
     const nowMs = Date.now();
     const nativeSnoozes: SnoozedAlertEntry[] = [];
@@ -542,9 +564,11 @@ export default function App() {
     const todayStr = formatDateToYMD(current);
     const currentDay = current.getDay();
     const dueAlerts: ActiveAlert[] = [];
-    // On Native Android, AlarmManager handles background/lock-screen triggers reliably.
-    // Keep WebView catch-up narrow (10s) on Android so reopening the app never re-rings a past lock-screen alarm.
-    const catchupWindowMs = isNativeAndroidPlatform() ? 10 * 1000 : 60 * 60 * 1000;
+    // On Native Android, give AlarmManager + ExactAlarmReceiver a 4s head start so WebView never steals
+    // the slot and marks it handled before the native lock-screen AlarmForegroundService runs.
+    const isNative = isNativeAndroidPlatform();
+    const nativeGraceMs = isNative ? 4000 : 0;
+    const catchupWindowMs = isNative ? 12 * 1000 : 60 * 60 * 1000;
 
     const isDueInWindow = (hour24: number, minute: number, key: string): boolean => {
       if (firedKeysRef.current.has(key)) return false;
@@ -557,9 +581,10 @@ export default function App() {
         0,
         0
       ).getTime();
+      const deltaMs = nowMs - scheduled;
       if (
-        nowMs >= scheduled &&
-        nowMs - scheduled <= catchupWindowMs &&
+        deltaMs >= nativeGraceMs &&
+        deltaMs <= catchupWindowMs &&
         scheduled >= sessionStartMsRef.current - 60 * 1000
       ) {
         firedKeysRef.current.add(key);
@@ -632,11 +657,10 @@ export default function App() {
     }
 
     // 4. Snoozed Alerts (for Alarms, Reminders, and Tasks)
-    const dueSnoozes = snoozedAlerts.filter(
-      (entry) =>
-        nowMs >= entry.triggerAtMs &&
-        nowMs - entry.triggerAtMs <= catchupWindowMs
-    );
+    const dueSnoozes = snoozedAlerts.filter((entry) => {
+      const deltaMs = nowMs - entry.triggerAtMs;
+      return deltaMs >= nativeGraceMs && deltaMs <= catchupWindowMs;
+    });
     if (dueSnoozes.length > 0) {
       setSnoozedAlerts((prev) => prev.filter((entry) => nowMs < entry.triggerAtMs));
       dueSnoozes.forEach((entry) => {
@@ -654,7 +678,9 @@ export default function App() {
     }
 
     if (dueAlerts.length > 0) {
-      if (isNativeAndroidPlatform()) {
+      if (isNative) {
+        // When screen is off / app is backgrounded, let native AlarmForegroundService own the lock screen
+        if (document.visibilityState !== 'visible') return;
         void syncHandledFromNative().then(
           ({ isAlertActive, activeSlotKey, handledSlotKeys }) => {
             if (isAlertActive) return;
@@ -850,6 +876,7 @@ export default function App() {
     });
   }, [
     settings.focusAutoDnd,
+    androidPermissions.dndAccess,
     focusState.running,
     focusState.endAtMs,
     focusState.linkedTaskId,
@@ -1133,6 +1160,11 @@ export default function App() {
     },
     []
   );
+
+  const handleTestLockScreenAlert = useCallback(async () => {
+    soundEngine.playTick(880, 0.02);
+    return scheduleNativeLockScreenTest(5);
+  }, []);
 
   // Note CRUD handlers
   const handleCreateNote = useCallback(
@@ -1627,6 +1659,12 @@ export default function App() {
               onToggleReminderDone={handleToggleReminderDone}
               onToggleAlarm={handleToggleAlarm}
               onToggleNoteChecklistLine={handleToggleNoteChecklistLine}
+              isNativeAndroid={androidPermissions.isNativeAndroid}
+              dndAccessGranted={androidPermissions.dndAccess}
+              focusAutoDndEnabled={settings.focusAutoDnd}
+              onEnableDndAccess={() => {
+                void handleTriggerAndroidPermission('dnd');
+              }}
             />
           )}
 
@@ -1710,6 +1748,7 @@ export default function App() {
                 void handleRequestNotificationPermission();
               }}
               onTestAlertPopup={handleTestAlertPopup}
+              onTestLockScreenAlert={handleTestLockScreenAlert}
               androidPermissions={androidPermissions}
               onTriggerAndroidPermission={(kind) => {
                 void handleTriggerAndroidPermission(kind);

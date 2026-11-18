@@ -112,23 +112,35 @@ function patchManifest() {
   let xml = fs.readFileSync(manifestPath, 'utf8');
 
   const requiredPermissions = [
-    'android.permission.POST_NOTIFICATIONS',
-    'android.permission.SCHEDULE_EXACT_ALARM',
-    'android.permission.USE_EXACT_ALARM',
-    'android.permission.USE_FULL_SCREEN_INTENT',
-    'android.permission.WAKE_LOCK',
-    'android.permission.SYSTEM_ALERT_WINDOW',
-    'android.permission.FOREGROUND_SERVICE',
-    'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
-    'android.permission.RECEIVE_BOOT_COMPLETED',
-    'android.permission.VIBRATE',
-    'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
-    'android.permission.ACCESS_NOTIFICATION_POLICY',
+    { name: 'android.permission.POST_NOTIFICATIONS' },
+    { name: 'android.permission.SCHEDULE_EXACT_ALARM' },
+    { name: 'android.permission.USE_EXACT_ALARM' },
+    { name: 'android.permission.USE_FULL_SCREEN_INTENT' },
+    { name: 'android.permission.WAKE_LOCK' },
+    { name: 'android.permission.DISABLE_KEYGUARD' },
+    { name: 'android.permission.SYSTEM_ALERT_WINDOW' },
+    { name: 'android.permission.FOREGROUND_SERVICE' },
+    { name: 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' },
+    { name: 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE' },
+    { name: 'android.permission.RECEIVE_BOOT_COMPLETED' },
+    { name: 'android.permission.VIBRATE' },
+    { name: 'android.permission.MODIFY_AUDIO_SETTINGS' },
+    { name: 'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS' },
+    { name: 'android.permission.ACCESS_NOTIFICATION_POLICY' },
+    { name: 'android.permission.RECORD_AUDIO' },
+    { name: 'android.permission.READ_MEDIA_AUDIO' },
+    { name: 'android.permission.READ_EXTERNAL_STORAGE', maxSdkVersion: 32 },
+    { name: 'android.permission.WRITE_EXTERNAL_STORAGE', maxSdkVersion: 29 },
+    { name: 'android.permission.ACCESS_NETWORK_STATE' },
   ];
 
   const missingPermissions = requiredPermissions
-    .filter((perm) => !xml.includes(`android:name="${perm}"`))
-    .map((perm) => `    <uses-permission android:name="${perm}" />`);
+    .filter((perm) => !xml.includes(`android:name="${perm.name}"`))
+    .map((perm) =>
+      perm.maxSdkVersion
+        ? `    <uses-permission android:name="${perm.name}" android:maxSdkVersion="${perm.maxSdkVersion}" />`
+        : `    <uses-permission android:name="${perm.name}" />`
+    );
 
   if (missingPermissions.length > 0) {
     const appTagIndex = xml.indexOf('<application');
@@ -142,18 +154,27 @@ function patchManifest() {
       xml.slice(appTagIndex).trimStart();
   }
 
-  const componentSnippets = [
-    {
-      marker: '.AlarmLockScreenActivity',
-      snippet: `
-        <activity
+  const lockScreenActivitySnippet = `<activity
             android:name=".AlarmLockScreenActivity"
             android:exported="false"
             android:showWhenLocked="true"
+            android:showOnLockScreen="true"
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
+            android:taskAffinity=""
             android:launchMode="singleInstance"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />`,
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />`;
+
+  // Upgrade an existing .AlarmLockScreenActivity declaration if present
+  const existingLockActivityRegex = /<activity\b[^>]*android:name="\.AlarmLockScreenActivity"[\s\S]*?\/>/;
+  if (existingLockActivityRegex.test(xml)) {
+    xml = xml.replace(existingLockActivityRegex, lockScreenActivitySnippet);
+  }
+
+  const componentSnippets = [
+    {
+      marker: '.AlarmLockScreenActivity',
+      snippet: `\n        ${lockScreenActivitySnippet}`,
     },
     {
       marker: '.AlarmForegroundService',
@@ -163,6 +184,32 @@ function patchManifest() {
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />`,
+    },
+    {
+      marker: '.FocusTimerForegroundService',
+      snippet: `
+        <service
+            android:name=".FocusTimerForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Live lock-screen Focus countdown timer" />
+        </service>`,
+    },
+    {
+      marker: '.FocusLockScreenActivity',
+      snippet: `
+        <activity
+            android:name=".FocusLockScreenActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:showOnLockScreen="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />`,
     },
     {
       marker: '.ExactAlarmReceiver',
