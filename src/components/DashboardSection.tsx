@@ -12,6 +12,7 @@ import {
   FileText,
   Pause,
   Play,
+  Pin,
   Plus,
   RotateCcw,
   ShieldCheck,
@@ -41,6 +42,7 @@ import { TactileCheckbox } from './TactileCheckbox';
 import { GlowingToggle } from './GlowingToggle';
 import { soundEngine } from '../utils/soundEngine';
 import { CopyButton } from './ClipboardButtons';
+import { FormattedNoteContent } from './NotesSection';
 
 export type QuickAddTarget = 'tasks' | 'reminders' | 'alarms' | 'notes';
 
@@ -59,6 +61,7 @@ interface DashboardSectionProps {
   onToggleTask: (id: string) => void;
   onToggleReminderDone: (id: string) => void;
   onToggleAlarm: (id: string, enabled: boolean) => void;
+  onToggleNoteChecklistLine?: (noteId: string, lineIdx: number) => void;
 }
 
 type TimelineFilter = 'all' | 'p1' | 'tasks' | 'reminders' | 'alarms';
@@ -102,6 +105,7 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
   onToggleTask,
   onToggleReminderDone,
   onToggleAlarm,
+  onToggleNoteChecklistLine,
 }) => {
   const today = getTodayDateString();
   const todayLocal = useMemo(() => parseYMDToLocalDate(today), [today]);
@@ -1155,19 +1159,39 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
             {dayNotes.length > 0 ? (
               <div className="divide-y divide-slate-200 dark:divide-white/[0.06]">
                 {dayNotes.map((note) => (
-                  <button
-                    key={note.id}
-                    type="button"
-                    onClick={() => onNavigate('notes')}
-                    className="w-full text-left py-2.5 first:pt-0 last:pb-0 hover:opacity-85 transition-opacity cursor-pointer"
-                  >
-                    <p className="truncate text-sm font-medium text-slate-900 dark:text-[#F8FAFC]">
-                      {note.title}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B]">
-                      {note.category} · {note.content}
-                    </p>
-                  </button>
+                  <div key={note.id} className="py-3 first:pt-0 last:pb-0">
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('notes')}
+                        className="flex min-w-0 items-center gap-1.5 text-left hover:opacity-80 transition-opacity cursor-pointer"
+                      >
+                        {note.pinned && (
+                          <Pin className="h-3 w-3 shrink-0 text-indigo-500 dark:text-[#818CF8]" />
+                        )}
+                        <span className="truncate text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                          {note.title}
+                        </span>
+                      </button>
+                      <span className="shrink-0 rounded-full bg-slate-100 dark:bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:text-[#94A3B8]">
+                        {note.category}
+                      </span>
+                    </div>
+                    <FormattedNoteContent
+                      content={note.content}
+                      compact
+                      maxLines={4}
+                      textSize="xs"
+                      onToggleChecklistLine={
+                        onToggleNoteChecklistLine
+                          ? (lineIdx) => {
+                              soundEngine.playTick(840, 0.015);
+                              onToggleNoteChecklistLine(note.id, lineIdx);
+                            }
+                          : undefined
+                      }
+                    />
+                  </div>
                 ))}
               </div>
             ) : recentNotes.length > 0 ? (
@@ -1177,19 +1201,39 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
                 </p>
                 <div className="divide-y divide-slate-200 dark:divide-white/[0.06]">
                   {recentNotes.map((note) => (
-                    <button
-                      key={note.id}
-                      type="button"
-                      onClick={() => onNavigate('notes')}
-                      className="w-full text-left py-2.5 first:pt-0 last:pb-0 hover:opacity-85 transition-opacity cursor-pointer"
-                    >
-                      <p className="truncate text-sm font-medium text-slate-900 dark:text-[#F8FAFC]">
-                        {note.title}
-                      </p>
-                      <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-[#64748B]">
-                        {note.category} · {note.content}
-                      </p>
-                    </button>
+                    <div key={note.id} className="py-3 first:pt-0 last:pb-0">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onNavigate('notes')}
+                          className="flex min-w-0 items-center gap-1.5 text-left hover:opacity-80 transition-opacity cursor-pointer"
+                        >
+                          {note.pinned && (
+                            <Pin className="h-3 w-3 shrink-0 text-indigo-500 dark:text-[#818CF8]" />
+                          )}
+                          <span className="truncate text-sm font-semibold text-slate-900 dark:text-[#F8FAFC]">
+                            {note.title}
+                          </span>
+                        </button>
+                        <span className="shrink-0 rounded-full bg-slate-100 dark:bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:text-[#94A3B8]">
+                          {note.category}
+                        </span>
+                      </div>
+                      <FormattedNoteContent
+                        content={note.content}
+                        compact
+                        maxLines={4}
+                        textSize="xs"
+                        onToggleChecklistLine={
+                          onToggleNoteChecklistLine
+                            ? (lineIdx) => {
+                                soundEngine.playTick(840, 0.015);
+                                onToggleNoteChecklistLine(note.id, lineIdx);
+                              }
+                            : undefined
+                        }
+                      />
+                    </div>
                   ))}
                 </div>
               </div>

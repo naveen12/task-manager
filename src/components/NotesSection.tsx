@@ -153,14 +153,35 @@ function renderInlineFormatted(text: string): React.ReactNode[] {
   return tokens;
 }
 
-const FormattedNoteContent: React.FC<{
+export function toggleChecklistLineInContent(
+  content: string,
+  lineIdx: number
+): string | null {
+  const lines = content.split('\n');
+  const target = lines[lineIdx];
+  if (target === undefined) return null;
+  const leading = target.match(/^\s*/)?.[0] ?? '';
+  const trimmed = target.trim();
+  const match = trimmed.match(/^-\s\[([ xX])\](?:\s(.*))?$/);
+  if (!match) return null;
+  const isChecked = match[1].toLowerCase() === 'x';
+  const body = match[2] ?? '';
+  lines[lineIdx] = `${leading}- [${isChecked ? ' ' : 'x'}] ${body}`;
+  return lines.join('\n');
+}
+
+export const FormattedNoteContent: React.FC<{
   content: string;
   compact?: boolean;
+  maxLines?: number;
+  textSize?: 'xs' | 'sm';
   onToggleChecklistLine?: (lineIdx: number) => void;
   onConvertChecklistLine?: (text: string, target: 'task' | 'reminder') => void;
 }> = ({
   content,
   compact = false,
+  maxLines,
+  textSize = 'sm',
   onToggleChecklistLine,
   onConvertChecklistLine,
 }) => {
@@ -173,10 +194,16 @@ const FormattedNoteContent: React.FC<{
   }
 
   const lines = content.split('\n');
-  const visibleLines = compact ? lines.slice(0, 8) : lines;
+  const lineLimit = maxLines ?? (compact ? 8 : undefined);
+  const visibleLines =
+    lineLimit !== undefined ? lines.slice(0, lineLimit) : lines;
 
   return (
-    <div className="flex flex-col gap-1.5 text-sm leading-relaxed text-slate-600 dark:text-[#94A3B8] select-text">
+    <div
+      className={`flex flex-col gap-1.5 ${
+        textSize === 'xs' ? 'text-xs' : 'text-sm'
+      } leading-relaxed text-slate-600 dark:text-[#94A3B8] select-text`}
+    >
       {visibleLines.map((line, idx) => {
         const trimmed = line.trim();
         if (!trimmed) {
@@ -202,14 +229,10 @@ const FormattedNoteContent: React.FC<{
             </h3>
           );
         }
-        if (
-          trimmed.startsWith('- [x] ') ||
-          trimmed.startsWith('- [X] ') ||
-          trimmed.startsWith('- [ ] ')
-        ) {
-          const isChecked =
-            trimmed.startsWith('- [x] ') || trimmed.startsWith('- [X] ');
-          const itemText = trimmed.slice(6);
+        const checklistMatch = trimmed.match(/^-\s\[([ xX])\](?:\s(.*))?$/);
+        if (checklistMatch) {
+          const isChecked = checklistMatch[1].toLowerCase() === 'x';
+          const itemText = checklistMatch[2] ?? '';
           const cleanText = stripInlineSyntaxForTitle(itemText);
 
           return (
@@ -221,13 +244,16 @@ const FormattedNoteContent: React.FC<{
                 {onToggleChecklistLine ? (
                   <button
                     type="button"
-                    onClick={() => onToggleChecklistLine(idx)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleChecklistLine(idx);
+                    }}
                     aria-label={
                       isChecked
-                        ? `Uncheck ${cleanText}`
-                        : `Check ${cleanText}`
+                        ? `Uncheck ${cleanText || 'item'}`
+                        : `Check ${cleanText || 'item'}`
                     }
-                    className={`mt-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] transition-colors cursor-pointer ${
+                    className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] transition-colors cursor-pointer ${
                       isChecked
                         ? 'border-emerald-500 bg-emerald-500/20 text-emerald-600 dark:text-[#34D399]'
                         : 'border-slate-400 dark:border-white/30 hover:border-indigo-500'
@@ -237,7 +263,7 @@ const FormattedNoteContent: React.FC<{
                   </button>
                 ) : (
                   <span
-                    className={`mt-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[10px] ${
+                    className={`mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[10px] ${
                       isChecked
                         ? 'border-emerald-500 bg-emerald-500/20 text-emerald-600 dark:text-[#34D399]'
                         : 'border-slate-400 dark:border-white/25'
@@ -313,9 +339,9 @@ const FormattedNoteContent: React.FC<{
         }
         return <p key={idx}>{renderInlineFormatted(line)}</p>;
       })}
-      {compact && lines.length > 8 && (
+      {lineLimit !== undefined && lines.length > lineLimit && (
         <p className="text-[11px] font-medium text-indigo-600 dark:text-[#818CF8]">
-          +{lines.length - 8} more lines…
+          +{lines.length - lineLimit} more lines…
         </p>
       )}
     </div>
@@ -814,22 +840,12 @@ export const NotesSection: React.FC<NotesSectionProps> = ({
   };
 
   const handleToggleChecklistOnNote = (note: NoteItem, lineIdx: number) => {
-    const lines = note.content.split('\n');
-    const target = lines[lineIdx];
-    if (target === undefined) return;
-    const leading = target.match(/^\s*/)?.[0] ?? '';
-    const trimmed = target.trim();
-    if (trimmed.startsWith('- [x] ') || trimmed.startsWith('- [X] ')) {
-      lines[lineIdx] = `${leading}- [ ] ${trimmed.slice(6)}`;
-    } else if (trimmed.startsWith('- [ ] ')) {
-      lines[lineIdx] = `${leading}- [x] ${trimmed.slice(6)}`;
-    } else {
-      return;
-    }
+    const nextContent = toggleChecklistLineInContent(note.content, lineIdx);
+    if (nextContent === null) return;
     soundEngine.playTick(840, 0.015);
     onUpdateNote(note.id, {
       title: note.title,
-      content: lines.join('\n'),
+      content: nextContent,
       category: note.category,
       tags: note.tags,
       pinned: note.pinned,

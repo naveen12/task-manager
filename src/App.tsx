@@ -35,7 +35,10 @@ import { DashboardSection, type QuickAddTarget } from './components/DashboardSec
 import { TasksSection } from './components/TasksSection';
 import { RemindersSection } from './components/RemindersSection';
 import { AlarmsSection } from './components/AlarmsSection';
-import { NotesSection } from './components/NotesSection';
+import {
+  NotesSection,
+  toggleChecklistLineInContent,
+} from './components/NotesSection';
 import { SettingsSection } from './components/SettingsSection';
 import { WEB_AUTO_BACKUP_STORAGE_KEY } from './components/BackupSection';
 import { AlarmRingOverlay } from './components/AlarmRingOverlay';
@@ -1169,6 +1172,24 @@ export default function App() {
     );
   }, []);
 
+  const handleToggleNoteChecklistLine = useCallback(
+    (noteId: string, lineIdx: number) => {
+      setNotes((prev) =>
+        prev.map((n) => {
+          if (n.id !== noteId) return n;
+          const nextContent = toggleChecklistLineInContent(n.content, lineIdx);
+          if (nextContent === null) return n;
+          return {
+            ...n,
+            content: nextContent,
+            updatedAt: new Date().toISOString(),
+          };
+        })
+      );
+    },
+    []
+  );
+
   const handleRestoreBackup = useCallback((payload: ChronoBackupPayload) => {
     setTasks(
       payload.data.tasks.map((t) => ({
@@ -1605,6 +1626,7 @@ export default function App() {
               onToggleTask={handleToggleTask}
               onToggleReminderDone={handleToggleReminderDone}
               onToggleAlarm={handleToggleAlarm}
+              onToggleNoteChecklistLine={handleToggleNoteChecklistLine}
             />
           )}
 
