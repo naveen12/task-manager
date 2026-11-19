@@ -252,8 +252,6 @@ export default function App() {
       overlayPermission: false,
       batteryOptimizationIgnored: false,
       dndAccess: false,
-      microphone: false,
-      mediaAudio: false,
     });
 
   const [focusState, setFocusState] = useState<FocusTimerState>(() => {
@@ -564,11 +562,11 @@ export default function App() {
     const todayStr = formatDateToYMD(current);
     const currentDay = current.getDay();
     const dueAlerts: ActiveAlert[] = [];
-    // On Native Android, give AlarmManager + ExactAlarmReceiver a 4s head start so WebView never steals
-    // the slot and marks it handled before the native lock-screen AlarmForegroundService runs.
+    // On Native Android, give AlarmManager + ExactAlarmReceiver a brief head start so WebView never
+    // steals a lock-screen alert, while still ringing in-app if native was delayed in foreground.
     const isNative = isNativeAndroidPlatform();
-    const nativeGraceMs = isNative ? 4000 : 0;
-    const catchupWindowMs = isNative ? 12 * 1000 : 60 * 60 * 1000;
+    const nativeGraceMs = isNative ? 2500 : 0;
+    const catchupWindowMs = isNative ? 60 * 1000 : 60 * 60 * 1000;
 
     const isDueInWindow = (hour24: number, minute: number, key: string): boolean => {
       if (firedKeysRef.current.has(key)) return false;
@@ -818,11 +816,6 @@ export default function App() {
         ? focusState.secondsLeft
         : focusState.presetMinutes * 60;
     const endAtMs = Date.now() + durationSec * 1000;
-    const endDate = new Date(endAtMs);
-    const linkedTitle = tasks.find((t) => t.id === focusState.linkedTaskId)?.title;
-    const focusLabel = linkedTitle
-      ? `Focus Complete: ${linkedTitle}`
-      : 'Focus Session Complete';
 
     setFocusState((prev) => ({
       ...prev,
@@ -830,42 +823,32 @@ export default function App() {
       running: true,
       endAtMs,
     }));
-
-    void setNativeFocusDndState({
-      enabled: true,
-      enableDnd: settings.focusAutoDnd,
-      allowAlarms: true,
-      endsAtMs: endAtMs,
-      focusLabel,
-      timeLabel: format12HourTime(endDate.getHours(), endDate.getMinutes()),
-    }).then((res) => {
-      setFocusState((prev) =>
-        prev.running ? { ...prev, dndActive: res.dndApplied } : prev
-      );
-    });
   }, [
     focusState.running,
     focusState.endAtMs,
     focusState.secondsLeft,
     focusState.presetMinutes,
-    focusState.linkedTaskId,
-    tasks,
-    settings.focusAutoDnd,
   ]);
 
-  // Sync Settings focusAutoDnd toggle immediately if toggled while a Focus session is active
+  const linkedFocusTaskTitle = useMemo(
+    () => tasks.find((t) => t.id === focusState.linkedTaskId)?.title ?? '',
+    [tasks, focusState.linkedTaskId]
+  );
+
+  // Single deduplicated native Focus DND + lock-screen countdown sync
   useEffect(() => {
     if (!focusState.running || !focusState.endAtMs) return;
     const endDate = new Date(focusState.endAtMs);
-    const linkedTitle = tasks.find((t) => t.id === focusState.linkedTaskId)?.title;
+    const focusLabel = linkedFocusTaskTitle
+      ? `Focus Complete: ${linkedFocusTaskTitle}`
+      : 'Focus Session Complete';
+
     void setNativeFocusDndState({
       enabled: true,
       enableDnd: settings.focusAutoDnd,
       allowAlarms: true,
       endsAtMs: focusState.endAtMs,
-      focusLabel: linkedTitle
-        ? `Focus Complete: ${linkedTitle}`
-        : 'Focus Session Complete',
+      focusLabel,
       timeLabel: format12HourTime(endDate.getHours(), endDate.getMinutes()),
     }).then((res) => {
       setFocusState((prev) =>
@@ -879,8 +862,7 @@ export default function App() {
     androidPermissions.dndAccess,
     focusState.running,
     focusState.endAtMs,
-    focusState.linkedTaskId,
-    tasks,
+    linkedFocusTaskTitle,
   ]);
 
   // Quick Add handler from Dashboard '+' button or Android Home Widget

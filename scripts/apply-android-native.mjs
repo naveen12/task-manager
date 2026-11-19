@@ -73,6 +73,16 @@ function copyJavaTemplates(packageName) {
   fs.mkdirSync(targetPkgDir, { recursive: true });
   removeExistingMainActivityKt(targetPkgDir);
 
+  // Remove obsolete native files if upgrading from an older build
+  const obsoleteFiles = ['FocusTimerForegroundService.java'];
+  for (const oldFile of obsoleteFiles) {
+    const oldPath = path.join(targetPkgDir, oldFile);
+    if (fs.existsSync(oldPath)) {
+      fs.unlinkSync(oldPath);
+      console.log(`- Removed obsolete ${path.relative(rootDir, oldPath)}`);
+    }
+  }
+
   const files = fs.readdirSync(templateJavaDir).filter((f) => f.endsWith('.java'));
   for (const file of files) {
     const src = fs.readFileSync(path.join(templateJavaDir, file), 'utf8');
@@ -111,36 +121,47 @@ function patchManifest() {
 
   let xml = fs.readFileSync(manifestPath, 'utf8');
 
+  // Remove previously injected unnecessary/problematic permissions on upgraded clones
+  const obsoletePermissions = [
+    'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+    'android.permission.RECORD_AUDIO',
+    'android.permission.READ_MEDIA_AUDIO',
+    'android.permission.READ_EXTERNAL_STORAGE',
+    'android.permission.WRITE_EXTERNAL_STORAGE',
+    'android.permission.DISABLE_KEYGUARD',
+    'android.permission.MODIFY_AUDIO_SETTINGS',
+    'android.permission.ACCESS_NETWORK_STATE',
+  ];
+  for (const perm of obsoletePermissions) {
+    const permRegex = new RegExp(`^[ \\t]*<uses-permission[^>]*android:name="${perm.replace(/\./g, '\\.')}"[^>]*/>\\r?\\n?`, 'gm');
+    xml = xml.replace(permRegex, '');
+  }
+
+  // Remove obsolete FocusTimerForegroundService declaration if present
+  xml = xml.replace(
+    /[ \t]*<service\b[^>]*android:name="\.FocusTimerForegroundService"[\s\S]*?(?:\/>|<\/service>)\r?\n?/g,
+    ''
+  );
+
+  // Clean, proven v1 core permissions + Focus Mode DND access
   const requiredPermissions = [
-    { name: 'android.permission.POST_NOTIFICATIONS' },
-    { name: 'android.permission.SCHEDULE_EXACT_ALARM' },
-    { name: 'android.permission.USE_EXACT_ALARM' },
-    { name: 'android.permission.USE_FULL_SCREEN_INTENT' },
-    { name: 'android.permission.WAKE_LOCK' },
-    { name: 'android.permission.DISABLE_KEYGUARD' },
-    { name: 'android.permission.SYSTEM_ALERT_WINDOW' },
-    { name: 'android.permission.FOREGROUND_SERVICE' },
-    { name: 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' },
-    { name: 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE' },
-    { name: 'android.permission.RECEIVE_BOOT_COMPLETED' },
-    { name: 'android.permission.VIBRATE' },
-    { name: 'android.permission.MODIFY_AUDIO_SETTINGS' },
-    { name: 'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS' },
-    { name: 'android.permission.ACCESS_NOTIFICATION_POLICY' },
-    { name: 'android.permission.RECORD_AUDIO' },
-    { name: 'android.permission.READ_MEDIA_AUDIO' },
-    { name: 'android.permission.READ_EXTERNAL_STORAGE', maxSdkVersion: 32 },
-    { name: 'android.permission.WRITE_EXTERNAL_STORAGE', maxSdkVersion: 29 },
-    { name: 'android.permission.ACCESS_NETWORK_STATE' },
+    'android.permission.POST_NOTIFICATIONS',
+    'android.permission.SCHEDULE_EXACT_ALARM',
+    'android.permission.USE_EXACT_ALARM',
+    'android.permission.USE_FULL_SCREEN_INTENT',
+    'android.permission.WAKE_LOCK',
+    'android.permission.SYSTEM_ALERT_WINDOW',
+    'android.permission.FOREGROUND_SERVICE',
+    'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
+    'android.permission.RECEIVE_BOOT_COMPLETED',
+    'android.permission.VIBRATE',
+    'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+    'android.permission.ACCESS_NOTIFICATION_POLICY',
   ];
 
   const missingPermissions = requiredPermissions
-    .filter((perm) => !xml.includes(`android:name="${perm.name}"`))
-    .map((perm) =>
-      perm.maxSdkVersion
-        ? `    <uses-permission android:name="${perm.name}" android:maxSdkVersion="${perm.maxSdkVersion}" />`
-        : `    <uses-permission android:name="${perm.name}" />`
-    );
+    .filter((perm) => !xml.includes(`android:name="${perm}"`))
+    .map((perm) => `    <uses-permission android:name="${perm}" />`);
 
   if (missingPermissions.length > 0) {
     const appTagIndex = xml.indexOf('<application');
@@ -165,10 +186,21 @@ function patchManifest() {
             android:launchMode="singleInstance"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />`;
 
-  // Upgrade an existing .AlarmLockScreenActivity declaration if present
+  const alarmServiceSnippet = `<service
+            android:name=".AlarmForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />`;
+
+  // Upgrade existing declarations if present from an older build
   const existingLockActivityRegex = /<activity\b[^>]*android:name="\.AlarmLockScreenActivity"[\s\S]*?\/>/;
   if (existingLockActivityRegex.test(xml)) {
     xml = xml.replace(existingLockActivityRegex, lockScreenActivitySnippet);
+  }
+
+  const existingAlarmServiceRegex = /<service\b[^>]*android:name="\.AlarmForegroundService"[\s\S]*?\/>/;
+  if (existingAlarmServiceRegex.test(xml)) {
+    xml = xml.replace(existingAlarmServiceRegex, alarmServiceSnippet);
   }
 
   const componentSnippets = [
@@ -178,25 +210,7 @@ function patchManifest() {
     },
     {
       marker: '.AlarmForegroundService',
-      snippet: `
-        <service
-            android:name=".AlarmForegroundService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />`,
-    },
-    {
-      marker: '.FocusTimerForegroundService',
-      snippet: `
-        <service
-            android:name=".FocusTimerForegroundService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Live lock-screen Focus countdown timer" />
-        </service>`,
+      snippet: `\n        ${alarmServiceSnippet}`,
     },
     {
       marker: '.FocusLockScreenActivity',
@@ -210,6 +224,14 @@ function patchManifest() {
             android:taskAffinity=""
             android:launchMode="singleInstance"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />`,
+    },
+    {
+      marker: '.FocusActionReceiver',
+      snippet: `
+        <receiver
+            android:name=".FocusActionReceiver"
+            android:enabled="true"
+            android:exported="false" />`,
     },
     {
       marker: '.ExactAlarmReceiver',

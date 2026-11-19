@@ -52,6 +52,12 @@ public class ExactAlarmReceiver extends BroadcastReceiver {
     serviceIntent.putExtra("snooze_minutes", intent.getIntExtra("snooze_minutes", 5));
     serviceIntent.putExtra("vibration_mode", intent.getStringExtra("vibration_mode"));
 
-    ContextCompat.startForegroundService(context, serviceIntent);
+    try {
+      ContextCompat.startForegroundService(context, serviceIntent);
+    } catch (Exception e) {
+      try {
+        context.startService(serviceIntent);
+      } catch (Exception ignored) {}
+    }
   }
 }

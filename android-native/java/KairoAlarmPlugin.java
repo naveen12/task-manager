@@ -46,18 +46,6 @@ import java.util.Locale;
     @Permission(
       strings = { Manifest.permission.POST_NOTIFICATIONS },
       alias = "notifications"
-    ),
-    @Permission(
-      strings = { Manifest.permission.RECORD_AUDIO },
-      alias = "microphone"
-    ),
-    @Permission(
-      strings = { Manifest.permission.READ_MEDIA_AUDIO },
-      alias = "mediaAudio"
-    ),
-    @Permission(
-      strings = { Manifest.permission.READ_EXTERNAL_STORAGE },
-      alias = "storage"
     )
   }
 )
@@ -146,21 +134,6 @@ public class KairoAlarmPlugin extends Plugin {
 
     boolean dndAccess = FocusDndManager.isDndAccessGranted(ctx);
 
-    boolean microphone =
-      ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO)
-      == PackageManager.PERMISSION_GRANTED;
-
-    boolean mediaAudio;
-    if (Build.VERSION.SDK_INT >= 33) {
-      mediaAudio =
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_MEDIA_AUDIO)
-        == PackageManager.PERMISSION_GRANTED;
-    } else {
-      mediaAudio =
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_EXTERNAL_STORAGE)
-        == PackageManager.PERMISSION_GRANTED;
-    }
-
     JSObject ret = new JSObject();
     ret.put("postNotifications", postNotifications);
     ret.put("exactAlarms", exactAlarms);
@@ -168,8 +141,6 @@ public class KairoAlarmPlugin extends Plugin {
     ret.put("overlayPermission", overlayPermission);
     ret.put("batteryOptimizationIgnored", batteryIgnored);
     ret.put("dndAccess", dndAccess);
-    ret.put("microphone", microphone);
-    ret.put("mediaAudio", mediaAudio);
     call.resolve(ret);
   }
 
@@ -192,46 +163,6 @@ public class KairoAlarmPlugin extends Plugin {
     boolean granted =
       getPermissionState("notifications") == PermissionState.GRANTED &&
       NotificationManagerCompat.from(getContext()).areNotificationsEnabled();
-    JSObject ret = new JSObject();
-    ret.put("granted", granted);
-    call.resolve(ret);
-  }
-
-  @PluginMethod
-  public void requestMicrophonePermission(PluginCall call) {
-    if (getPermissionState("microphone") == PermissionState.GRANTED) {
-      JSObject ret = new JSObject();
-      ret.put("granted", true);
-      call.resolve(ret);
-      return;
-    }
-    requestPermissionForAlias("microphone", call, "microphonePermsCallback");
-  }
-
-  @PermissionCallback
-  private void microphonePermsCallback(PluginCall call) {
-    boolean granted = getPermissionState("microphone") == PermissionState.GRANTED;
-    JSObject ret = new JSObject();
-    ret.put("granted", granted);
-    call.resolve(ret);
-  }
-
-  @PluginMethod
-  public void requestMediaAudioPermission(PluginCall call) {
-    String alias = Build.VERSION.SDK_INT >= 33 ? "mediaAudio" : "storage";
-    if (getPermissionState(alias) == PermissionState.GRANTED) {
-      JSObject ret = new JSObject();
-      ret.put("granted", true);
-      call.resolve(ret);
-      return;
-    }
-    requestPermissionForAlias(alias, call, "mediaAudioPermsCallback");
-  }
-
-  @PermissionCallback
-  private void mediaAudioPermsCallback(PluginCall call) {
-    String alias = Build.VERSION.SDK_INT >= 33 ? "mediaAudio" : "storage";
-    boolean granted = getPermissionState(alias) == PermissionState.GRANTED;
     JSObject ret = new JSObject();
     ret.put("granted", granted);
     call.resolve(ret);

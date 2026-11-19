@@ -1,6 +1,5 @@
 package __PACKAGE__;
 
-import android.app.ActivityOptions;
 import android.app.KeyguardManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -12,6 +11,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
+import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
@@ -32,7 +32,7 @@ public class AlarmForegroundService extends Service {
   public static final String ACTION_STOP = "com.kairo.app.ACTION_STOP_ALERT";
   public static final String ACTION_CLOSE_POPUP = "com.kairo.app.ACTION_CLOSE_LOCK_POPUP";
 
-  public static final String CHANNEL_ID = "kairo_urgent_alerts_v3";
+  public static final String CHANNEL_ID = "kairo_urgent_alerts_v4";
   private static final int NOTIFICATION_ID = 42001;
   private static final long CRESCENDO_DURATION_MS = 15000L;
 
@@ -40,6 +40,7 @@ public class AlarmForegroundService extends Service {
   public static volatile String activeSlotKey = "";
 
   private MediaPlayer mediaPlayer;
+  private Ringtone fallbackRingtone;
   private Vibrator vibrator;
   private PowerManager.WakeLock screenWakeLock;
   private final Handler volumeHandler = new Handler(Looper.getMainLooper());
@@ -116,6 +117,11 @@ public class AlarmForegroundService extends Service {
     isAlertActive = true;
     activeSlotKey = currentSlotKey;
 
+    wakeScreenIfNeeded();
+    ensureNotificationChannel();
+    Notification notification = buildUrgentNotification();
+    promoteToForegroundAndNotify(notification);
+
     AlarmScheduler.recordHandledAlert(
       this,
       currentSlotKey,
@@ -126,11 +132,6 @@ public class AlarmForegroundService extends Service {
       "fired",
       0L
     );
-
-    wakeScreenIfNeeded();
-    ensureNotificationChannel();
-    Notification notification = buildUrgentNotification();
-    promoteToForegroundAndNotify(notification);
 
     if (!"vibrate_only".equalsIgnoreCase(currentVibrationMode)) {
       startAlarmAudio();
@@ -148,17 +149,22 @@ public class AlarmForegroundService extends Service {
   }
 
   private void promoteToForegroundAndNotify(Notification notification) {
-    try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    boolean promoted = false;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
         startForeground(
           NOTIFICATION_ID,
           notification,
           ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         );
-      } else {
+        promoted = true;
+      } catch (Exception ignored) {}
+    }
+    if (!promoted) {
+      try {
         startForeground(NOTIFICATION_ID, notification);
-      }
-    } catch (Exception ignored) {}
+      } catch (Exception ignored) {}
+    }
 
     try {
       NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -215,7 +221,6 @@ public class AlarmForegroundService extends Service {
     channel.setDescription("High-priority heads-up and lock-screen alerts with Snooze and Stop");
     channel.enableLights(true);
     channel.enableVibration(true);
-    channel.setSound(null, null);
     channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
     channel.setBypassDnd(true);
     nm.createNotificationChannel(channel);
@@ -281,7 +286,6 @@ public class AlarmForegroundService extends Service {
       .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .setDefaults(NotificationCompat.DEFAULT_LIGHTS)
-      .setSilent(true)
       .setOngoing(true)
       .setAutoCancel(false)
       .setContentIntent(fullScreenPi)
@@ -306,43 +310,40 @@ public class AlarmForegroundService extends Service {
       popupIntent.putExtra("alert_name", currentName);
       popupIntent.putExtra("alert_time", currentTime);
       popupIntent.putExtra("snooze_minutes", currentSnoozeMinutes);
-
-      if (Build.VERSION.SDK_INT >= 34) {
-        ActivityOptions opts = ActivityOptions.makeBasic();
-        opts.setPendingIntentBackgroundActivityStartMode(
-          ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-        );
-        startActivity(popupIntent, opts.toBundle());
-      } else {
-        startActivity(popupIntent);
-      }
+      startActivity(popupIntent);
     } catch (Exception ignored) {}
   }
 
-  private void startAlarmAudio() {
-    stopAlarmAudio();
+  private Uri resolveAlarmUri() {
+    Uri[] candidates = new Uri[]{
+      RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+      RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+      RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+    };
+    for (Uri uri : candidates) {
+      if (uri != null) return uri;
+    }
+    return null;
+  }
+
+  private boolean tryStartMediaPlayer(Uri toneUri, boolean gradual) {
+    if (toneUri == null) return false;
+    MediaPlayer player = null;
     try {
-      Uri toneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-      if (toneUri == null) {
-        toneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-      }
-      if (toneUri == null) return;
-
-      boolean gradual = AlarmScheduler.isGradualVolumeEnabled(this);
-
-      mediaPlayer = new MediaPlayer();
-      mediaPlayer.setDataSource(this, toneUri);
-      mediaPlayer.setAudioAttributes(
+      player = new MediaPlayer();
+      player.setDataSource(this, toneUri);
+      player.setAudioAttributes(
         new AudioAttributes.Builder()
           .setUsage(AudioAttributes.USAGE_ALARM)
           .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
           .build()
       );
-      mediaPlayer.setLooping(true);
-      mediaPlayer.prepare();
+      player.setLooping(true);
+      player.prepare();
+      mediaPlayer = player;
 
       if (gradual) {
-        mediaPlayer.setVolume(0.08f, 0.08f);
+        mediaPlayer.setVolume(0.12f, 0.12f);
         final long startMs = System.currentTimeMillis();
         volumeRunnable = new Runnable() {
           @Override
@@ -350,7 +351,7 @@ public class AlarmForegroundService extends Service {
             if (mediaPlayer == null) return;
             long elapsed = Math.max(0L, System.currentTimeMillis() - startMs);
             float t = Math.min(1f, (float) elapsed / (float) CRESCENDO_DURATION_MS);
-            float eased = 0.08f + 0.92f * (t * t * (3f - 2f * t));
+            float eased = 0.12f + 0.88f * (t * t * (3f - 2f * t));
             try {
               mediaPlayer.setVolume(eased, eased);
             } catch (Exception ignored) {}
@@ -365,6 +366,53 @@ public class AlarmForegroundService extends Service {
       }
 
       mediaPlayer.start();
+      return true;
+    } catch (Exception e) {
+      if (player != null) {
+        try {
+          player.release();
+        } catch (Exception ignored) {}
+      }
+      mediaPlayer = null;
+      return false;
+    }
+  }
+
+  private void startAlarmAudio() {
+    stopAlarmAudio();
+    boolean gradual = AlarmScheduler.isGradualVolumeEnabled(this);
+
+    Uri[] candidates = new Uri[]{
+      RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+      RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+      RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+    };
+    for (Uri uri : candidates) {
+      if (tryStartMediaPlayer(uri, gradual)) {
+        return;
+      }
+    }
+
+    // Final fallback using Android Ringtone API if MediaPlayer fails on a device
+    try {
+      Uri fallbackUri = resolveAlarmUri();
+      if (fallbackUri != null) {
+        fallbackRingtone = RingtoneManager.getRingtone(this, fallbackUri);
+        if (fallbackRingtone != null) {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            fallbackRingtone.setLooping(true);
+          }
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            fallbackRingtone.setAudioAttributes(
+              new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            );
+          }
+          fallbackRingtone.play();
+        }
+      }
     } catch (Exception ignored) {}
   }
 
@@ -382,6 +430,14 @@ public class AlarmForegroundService extends Service {
         mediaPlayer.release();
       } catch (Exception ignored) {}
       mediaPlayer = null;
+    }
+    if (fallbackRingtone != null) {
+      try {
+        if (fallbackRingtone.isPlaying()) {
+          fallbackRingtone.stop();
+        }
+      } catch (Exception ignored) {}
+      fallbackRingtone = null;
     }
   }
 

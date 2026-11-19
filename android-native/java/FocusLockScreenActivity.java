@@ -46,7 +46,7 @@ public class FocusLockScreenActivity extends Activity {
     super.onCreate(savedInstanceState);
     applyLockFlags();
 
-    long endsAtMs = getIntent().getLongExtra("ends_at_ms", FocusTimerForegroundService.currentEndsAtMs);
+    long endsAtMs = getIntent().getLongExtra("ends_at_ms", FocusDndManager.getActiveFocusEndMs(this));
     String focusLabel = getIntent().getStringExtra("focus_label");
     String timeLabel = getIntent().getStringExtra("time_label");
     boolean dndActive = getIntent().getBooleanExtra("dnd_active", false);
@@ -160,16 +160,17 @@ public class FocusLockScreenActivity extends Activity {
     endBtn.setOnClickListener(new View.OnClickListener() {
       @Override
       public void onClick(View v) {
-        Intent i = new Intent(FocusLockScreenActivity.this, FocusTimerForegroundService.class);
-        i.setAction(FocusTimerForegroundService.ACTION_STOP);
-        startService(i);
+        Intent i = new Intent(FocusLockScreenActivity.this, FocusActionReceiver.class);
+        i.setAction(FocusActionReceiver.ACTION_STOP_FOCUS);
+        i.putExtra("ends_at_ms", endsAtMs);
+        sendBroadcast(i);
         finish();
       }
     });
 
     startCountdown(endsAtMs);
 
-    IntentFilter filter = new IntentFilter(FocusTimerForegroundService.ACTION_CLOSE_FOCUS_SCREEN);
+    IntentFilter filter = new IntentFilter(FocusDndManager.ACTION_CLOSE_FOCUS_SCREEN);
     if (Build.VERSION.SDK_INT >= 33) {
       registerReceiver(closeReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
     } else {
@@ -216,7 +217,7 @@ public class FocusLockScreenActivity extends Activity {
     super.onNewIntent(intent);
     setIntent(intent);
     applyLockFlags();
-    long endsAtMs = intent.getLongExtra("ends_at_ms", FocusTimerForegroundService.currentEndsAtMs);
+    long endsAtMs = intent.getLongExtra("ends_at_ms", FocusDndManager.getActiveFocusEndMs(this));
     startCountdown(endsAtMs);
   }
 

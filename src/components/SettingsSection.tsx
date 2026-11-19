@@ -283,8 +283,6 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
         androidPermissions.exactAlarms,
         androidPermissions.batteryOptimizationIgnored,
         androidPermissions.dndAccess,
-        androidPermissions.microphone,
-        androidPermissions.mediaAudio,
       ]
     : [];
   const androidGrantedCount = androidChecks.filter(Boolean).length;
@@ -621,14 +619,14 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
               </button>
             </div>
             <p className="text-xs text-slate-500 dark:text-[#94A3B8] mb-1">
-              Enable all permissions below so Alarms, Reminders, and Tasks wake your locked screen, Focus Timer can mute other apps, and Voice Notes / Ringtones work reliably.
+              Enable the core permissions below so Alarms, Reminders, and Tasks wake your locked screen and Focus Timer can silence calls &amp; WhatsApp while showing the lock-screen countdown.
             </p>
             {(
               [
                 {
                   key: 'notifications' as AndroidPermissionAction,
                   manageAction: 'notificationSettings' as AndroidPermissionAction,
-                  title: 'Notifications (Heads-Up & Lock-Screen Alerts)',
+                  title: 'Heads-Up, Lock-Screen & High-Priority Notifications',
                   granted: androidPermissions.postNotifications,
                   hint: 'Also confirm "Lock screen notifications" and "Pop on screen" are turned ON inside Channel Settings.',
                 },
@@ -663,23 +661,9 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
                 {
                   key: 'dnd' as AndroidPermissionAction,
                   manageAction: 'dnd' as AndroidPermissionAction,
-                  title: 'Do Not Disturb Access (Focus Distraction Shield)',
+                  title: 'Do Not Disturb Access (Focus Timer)',
                   granted: androidPermissions.dndAccess,
-                  hint: 'Allows Focus Timer to silence other apps while focusing and restore them afterward.',
-                },
-                {
-                  key: 'microphone' as AndroidPermissionAction,
-                  manageAction: 'appInfo' as AndroidPermissionAction,
-                  title: 'Microphone (Voice-to-Text Notes)',
-                  granted: androidPermissions.microphone,
-                  hint: 'Allows dictating notes hands-free using speech recognition.',
-                },
-                {
-                  key: 'mediaAudio' as AndroidPermissionAction,
-                  manageAction: 'appInfo' as AndroidPermissionAction,
-                  title: 'Music, Audio & Storage (Ringtones & Local Backups)',
-                  granted: androidPermissions.mediaAudio,
-                  hint: 'Allows picking device alarm audio and exporting local backup files.',
+                  hint: 'Allows Focus Timer to silence WhatsApp & calls while focusing and restore them afterward.',
                 },
               ] as const
             ).map((perm) => (

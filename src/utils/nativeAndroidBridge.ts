@@ -39,8 +39,6 @@ export interface AndroidAlertPermissionsStatus {
   overlayPermission: boolean;
   batteryOptimizationIgnored: boolean;
   dndAccess: boolean;
-  microphone: boolean;
-  mediaAudio: boolean;
 }
 
 interface KairoAlarmNativePlugin {
@@ -50,8 +48,6 @@ interface KairoAlarmNativePlugin {
   }) => Promise<{ scheduled: number }>;
   getPermissionStatus: () => Promise<Omit<AndroidAlertPermissionsStatus, 'isNativeAndroid'>>;
   requestNotificationPermission: () => Promise<{ granted: boolean }>;
-  requestMicrophonePermission?: () => Promise<{ granted: boolean }>;
-  requestMediaAudioPermission?: () => Promise<{ granted: boolean }>;
   openNotificationSettings?: () => Promise<void>;
   openExactAlarmSettings: () => Promise<void>;
   openFullScreenIntentSettings: () => Promise<void>;
@@ -304,8 +300,6 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       overlayPermission: false,
       batteryOptimizationIgnored: false,
       dndAccess: false,
-      microphone: false,
-      mediaAudio: false,
     };
   }
   try {
@@ -314,8 +308,6 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       isNativeAndroid: true,
       ...status,
       dndAccess: Boolean(status.dndAccess),
-      microphone: Boolean(status.microphone),
-      mediaAudio: Boolean(status.mediaAudio),
     };
   } catch {
     return {
@@ -326,8 +318,6 @@ export async function getAndroidAlertPermissions(): Promise<AndroidAlertPermissi
       overlayPermission: false,
       batteryOptimizationIgnored: false,
       dndAccess: false,
-      microphone: false,
-      mediaAudio: false,
     };
   }
 }
@@ -340,8 +330,6 @@ export type AndroidPermissionAction =
   | 'overlay'
   | 'battery'
   | 'dnd'
-  | 'microphone'
-  | 'mediaAudio'
   | 'appInfo';
 
 export async function triggerAndroidPermissionSetting(
@@ -364,10 +352,6 @@ export async function triggerAndroidPermissionSetting(
       await plugin.openBatterySettings();
     } else if (kind === 'dnd') {
       await plugin.openDndSettings?.();
-    } else if (kind === 'microphone') {
-      await plugin.requestMicrophonePermission?.();
-    } else if (kind === 'mediaAudio') {
-      await plugin.requestMediaAudioPermission?.();
     } else if (kind === 'appInfo') {
       await plugin.openAppInfoSettings?.();
     }
